@@ -89,8 +89,13 @@ There's no dedicated "skipToEnd or Finish" call, seek to the animation's duratio
 **Remember:** if you want to scale an animation, always scale relative to `canvas.getWidth()` / `canvas.getHeight()` or more accuratly the aspect ratio not an arbitrary target size or you'll get distortion or unwanted cropping.
 
 ```java
-float scale = desiredWidth / canvas.getWidth();
-animation.setAnimationSize(canvas.getWidth() * scale, canvas.getHeight() * scale);
+canvas.getWidth() = 500; canvas.getHeight() = 800;
+
+//Try to maintain the aspect ratio when setting the size, if you don't, it'll stretch the animation
+animation.setAnimationSize(250, 400);
+
+//Or you can stretch to a cube shape
+animation.setAnimationSize(400,400);
 ```
 
 ---
