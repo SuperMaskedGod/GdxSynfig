@@ -671,16 +671,6 @@ public class SifAnimation extends Container<Group> {
     public Param getTimeOffsetParam() { return timeOffsetParam; }
     public Param getTimeDilationParam() { return timeDilationParam; }
 
-    /**
-     * Resolves the effective local time for this group/switch layer's contents,
-     * applying its "time_offset" and "time_dilation" parameters (Synfig's
-     * Time Offset Parameter / Time Dilation). Both parameters can themselves
-     * be animated, so they're evaluated at the parent-space time passed in.
-     *
-     * Matches Synfig semantics: the offset "brings forward" the contents when
-     * positive (delays them when negative), and dilation scales the rate at
-     * which time passes for the contents (e.g. 2.0 = double speed, -1.0 = reverse).
-     */
     private float resolveLocalTime(float parentTime) {
         float dilation = 1f;
         if (timeDilationParam != null && timeDilationParam.getValue() != null) {
@@ -700,10 +690,6 @@ public class SifAnimation extends Container<Group> {
         return parentTime * dilation + offset;
     }
 
-    /**
-     * Evaluates a (possibly animated) scalar-valued ValueNode at the given time,
-     * falling back to def if unavailable. Used for time_dilation.
-     */
     private static Double evaluateAnimatedScalar(ValueNode node, float time, float fps, float def) {
         if (!node.isAnimated()) {
             Double v = node.getDoubleValue();
@@ -733,9 +719,6 @@ public class SifAnimation extends Container<Group> {
         float duration = t1 - t0;
         if (duration <= 0) return valueAsDouble(prev.getValue(), def);
 
-        // Simple linear blend between waypoints is sufficient for a scalar
-        // control parameter like time_dilation; avoids depending on the
-        // full Hermite tangent machinery in SifImage for this niche case.
         float progress = (time - t0) / duration;
         double v0 = valueAsDouble(prev.getValue(), def);
         double v1 = valueAsDouble(next.getValue(), def);
@@ -752,12 +735,6 @@ public class SifAnimation extends Container<Group> {
         return d != null ? d : def;
     }
 
-    /**
-     * Evaluates a (possibly animated) "time" ValueNode (e.g. time_offset) at
-     * the given time, returning seconds. Time-typed values store their raw
-     * string (e.g. "0s", "-0.25s") in the "value" attribute, same as other
-     * scalar nodes, so we reuse SifTimeUtils to parse it.
-     */
     private static float evaluateAnimatedTime(ValueNode node, float time, float fps) {
         if (!node.isAnimated()) {
             return SifTimeUtils.parseTime(node.getTimeRaw(), fps);
@@ -930,11 +907,6 @@ public class SifAnimation extends Container<Group> {
         updateDuration(layer, 0f, 1f);
     }
 
-    /**
-     * @param parentOffset the time_offset (seconds) accumulated from enclosing group/switch
-     *                      layers, mapping this layer's local waypoint times back into root time
-     * @param parentDilation the time_dilation accumulated from enclosing group/switch layers
-     */
     private void updateDuration(Layer layer, float parentOffset, float parentDilation) {
         Param tx = layer.getParam("transformation");
         if (tx != null && tx.getValue() != null) {
@@ -967,9 +939,7 @@ public class SifAnimation extends Container<Group> {
                 if (dilationParam != null && dilationParam.getValue() != null && dilationParam.getValue().getDoubleValue() != null) {
                     ownDilation = dilationParam.getValue().getDoubleValue().floatValue();
                 }
-                // Forward mapping so far: thisLocalTime = rootTime * parentDilation + parentOffset.
-                // Descending one more level: childTime = thisLocalTime * ownDilation + ownOffset
-                //   = rootTime * (parentDilation*ownDilation) + (parentOffset*ownDilation + ownOffset)
+
                 childDilation = parentDilation * ownDilation;
                 childOffset = parentOffset * ownDilation + ownOffset;
             }
@@ -979,11 +949,7 @@ public class SifAnimation extends Container<Group> {
             }
         }
     }
-
-    /**
-     * Maps a waypoint time expressed in this layer's local time-space back to
-     * root time-space, inverting the forward mapping localTime = rootTime*dilation + offset.
-     */
+    
     private static float toRootTime(float localTime, float offset, float dilation) {
         if (dilation == 0f) return localTime + offset;
         return (localTime - offset) / dilation;
