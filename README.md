@@ -74,7 +74,7 @@ Animations **do not play automatically** on creation, you must call `play()` exp
 animation.seekTo(animation.getDuration());
 ```
 
-There's no dedicated "stop" call, seek to the animation's duration to end it immediately.
+There's no dedicated "skipToEnd or Finish" call, seek to the animation's duration to end it immediately.
 
 ---
 
