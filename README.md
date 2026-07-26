@@ -82,7 +82,7 @@ There's no dedicated "skipToEnd or Finish" call, seek to the animation's duratio
 
 | Method | Behavior |
 |---|---|
-| `setSize(width, height)` | Sets the **clip size**, aka the container's visible bounds. Content outside this size is **clipped/cropped**. |
+| `setSize(width, height)` | Sets the **clip size**, aka the container's visible bounds. Content outside this size is **clipped/cropped**, if the size is smaller than the animations canvas size it will clip. |
 | `setAnimationSize(width, height)` | **Scales** the animation to fit the given size, without clipping. **Use this one.** |
 | `canvas.getWidth()` / `canvas.getHeight()` | The animation's **actual, native size**, as in Synfig. |
 
