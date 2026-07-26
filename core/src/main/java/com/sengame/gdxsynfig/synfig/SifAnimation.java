@@ -8,6 +8,7 @@ import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.Batch;
 import com.badlogic.gdx.graphics.g2d.Sprite;
+import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.Group;
@@ -404,8 +405,21 @@ public class SifAnimation extends Container<Group> {
         activeMusic.clear();
     }
 
+    float trueAmount = 1f;
+
     @Override
     public void draw(Batch batch, float parentAlpha) {
+        if (trueAmount > 1f && batch instanceof SpriteBatch) {
+            SpriteBatch spriteBatch = (SpriteBatch) batch;
+            AlphaOverflowShader.begin(spriteBatch, trueAmount);
+            drawInternal(batch, parentAlpha);
+            AlphaOverflowShader.end(batch);
+        } else {
+            drawInternal(batch, parentAlpha);
+        }
+    }
+
+    private void drawInternal(Batch batch, float parentAlpha) {
         Color color = getColor();
         float oldBatchColor = batch.getPackedColor();
         batch.setColor(color.r, color.g, color.b, color.a * parentAlpha);
@@ -580,8 +594,12 @@ public class SifAnimation extends Container<Group> {
                 ((SifImage) actor).updateAnimation(effectiveTime, fps);
             } else if (actor instanceof SifAnimation) {
                 SifAnimation group = (SifAnimation) actor;
+                // The group's own transformation/amount (origin, angle, scale, opacity)
+                // are driven by the parent-space time; per Synfig, time_offset/time_dilation
+                // only affect the group's *contents*, not the group layer itself.
                 SifImage.applyState(group, effectiveTime, fps, group.getAmountParam(), group.getTransformParam(), group.getScaleFactor(), group.getCanvasCenterX(), group.getCanvasCenterY());
-                group.updateTree(effectiveTime);
+                float childTime = group.resolveLocalTime(effectiveTime);
+                group.updateTree(childTime);
             }
         }
     }
@@ -641,6 +659,8 @@ public class SifAnimation extends Container<Group> {
 
     private Param amountParam;
     private Param transformParam;
+    private Param timeOffsetParam;
+    private Param timeDilationParam;
     private float nestedScaleFactor, nestedCx, nestedCy;
     public Param getAmountParam() { return amountParam; }
     public Param getTransformParam() { return transformParam; }
@@ -648,6 +668,139 @@ public class SifAnimation extends Container<Group> {
     public float getCanvasCenterX() { return nestedCx; }
     public float getCanvasCenterY() { return nestedCy; }
     public Param getSwitchLayerParam() { return switchLayerParam; }
+    public Param getTimeOffsetParam() { return timeOffsetParam; }
+    public Param getTimeDilationParam() { return timeDilationParam; }
+
+    /**
+     * Resolves the effective local time for this group/switch layer's contents,
+     * applying its "time_offset" and "time_dilation" parameters (Synfig's
+     * Time Offset Parameter / Time Dilation). Both parameters can themselves
+     * be animated, so they're evaluated at the parent-space time passed in.
+     *
+     * Matches Synfig semantics: the offset "brings forward" the contents when
+     * positive (delays them when negative), and dilation scales the rate at
+     * which time passes for the contents (e.g. 2.0 = double speed, -1.0 = reverse).
+     */
+    private float resolveLocalTime(float parentTime) {
+        float dilation = 1f;
+        if (timeDilationParam != null && timeDilationParam.getValue() != null) {
+            ValueNode dNode = timeDilationParam.getValue();
+            Double d = dNode.isAnimated()
+                ? evaluateAnimatedScalar(dNode, parentTime, fps, 1f)
+                : dNode.getDoubleValue();
+            if (d != null) dilation = d.floatValue();
+        }
+
+        float offset = 0f;
+        if (timeOffsetParam != null && timeOffsetParam.getValue() != null) {
+            ValueNode oNode = timeOffsetParam.getValue();
+            offset = evaluateAnimatedTime(oNode, parentTime, fps);
+        }
+
+        return parentTime * dilation + offset;
+    }
+
+    /**
+     * Evaluates a (possibly animated) scalar-valued ValueNode at the given time,
+     * falling back to def if unavailable. Used for time_dilation.
+     */
+    private static Double evaluateAnimatedScalar(ValueNode node, float time, float fps, float def) {
+        if (!node.isAnimated()) {
+            Double v = node.getDoubleValue();
+            return v != null ? v : (double) def;
+        }
+        List<Waypoint> wps = node.getWaypoints();
+        if (wps == null || wps.isEmpty()) return (double) def;
+
+        Waypoint prev = null;
+        Waypoint next = null;
+        for (Waypoint wp : wps) {
+            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
+            if (wpTime <= time) {
+                prev = wp;
+            } else {
+                next = wp;
+                break;
+            }
+        }
+
+        if (prev == null && next != null) return valueAsDouble(next.getValue(), def);
+        if (prev != null && next == null) return valueAsDouble(prev.getValue(), def);
+        if (prev == null) return (double) def;
+
+        float t0 = SifTimeUtils.parseTime(prev.getTime(), fps);
+        float t1 = SifTimeUtils.parseTime(next.getTime(), fps);
+        float duration = t1 - t0;
+        if (duration <= 0) return valueAsDouble(prev.getValue(), def);
+
+        // Simple linear blend between waypoints is sufficient for a scalar
+        // control parameter like time_dilation; avoids depending on the
+        // full Hermite tangent machinery in SifImage for this niche case.
+        float progress = (time - t0) / duration;
+        double v0 = valueAsDouble(prev.getValue(), def);
+        double v1 = valueAsDouble(next.getValue(), def);
+
+        if ("constant".equals(prev.getAfter()) || "constant".equals(next.getBefore())) {
+            return progress < 1.0f ? v0 : v1;
+        }
+        return v0 + (v1 - v0) * progress;
+    }
+
+    private static double valueAsDouble(ValueNode val, float def) {
+        if (val == null) return def;
+        Double d = val.getDoubleValue();
+        return d != null ? d : def;
+    }
+
+    /**
+     * Evaluates a (possibly animated) "time" ValueNode (e.g. time_offset) at
+     * the given time, returning seconds. Time-typed values store their raw
+     * string (e.g. "0s", "-0.25s") in the "value" attribute, same as other
+     * scalar nodes, so we reuse SifTimeUtils to parse it.
+     */
+    private static float evaluateAnimatedTime(ValueNode node, float time, float fps) {
+        if (!node.isAnimated()) {
+            return SifTimeUtils.parseTime(node.getTimeRaw(), fps);
+        }
+        List<Waypoint> wps = node.getWaypoints();
+        if (wps == null || wps.isEmpty()) {
+            return SifTimeUtils.parseTime(node.getTimeRaw(), fps);
+        }
+
+        Waypoint prev = null;
+        Waypoint next = null;
+        for (Waypoint wp : wps) {
+            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
+            if (wpTime <= time) {
+                prev = wp;
+            } else {
+                next = wp;
+                break;
+            }
+        }
+
+        if (prev == null && next != null) {
+            return next.getValue() != null ? SifTimeUtils.parseTime(next.getValue().getTimeRaw(), fps) : 0f;
+        }
+        if (prev != null && next == null) {
+            return prev.getValue() != null ? SifTimeUtils.parseTime(prev.getValue().getTimeRaw(), fps) : 0f;
+        }
+        if (prev == null) return 0f;
+
+        float t0 = SifTimeUtils.parseTime(prev.getTime(), fps);
+        float t1 = SifTimeUtils.parseTime(next.getTime(), fps);
+        float duration = t1 - t0;
+        float v0 = prev.getValue() != null ? SifTimeUtils.parseTime(prev.getValue().getTimeRaw(), fps) : 0f;
+        if (duration <= 0) return v0;
+
+        float v1 = next.getValue() != null ? SifTimeUtils.parseTime(next.getValue().getTimeRaw(), fps) : 0f;
+        float progress = (time - t0) / duration;
+
+        if ("constant".equals(prev.getAfter()) || "constant".equals(next.getBefore())) {
+            return progress < 1.0f ? v0 : v1;
+        }
+        return v0 + (v1 - v0) * progress;
+    }
 
     private void handleGroupLayer(Layer layer, AssetManager assetManager, FileHandle folderPath, FileHandle audioFolderPath, float scaleFactor, float canvasCenterX, float canvasCenterY, int depth, Array<MusicEvent> masterMusicList, Array<SifImage> masterImageList) {
         if (depth >= MAX_GROUP_NESTING_DEPTH) return;
@@ -658,6 +811,8 @@ public class SifAnimation extends Container<Group> {
 
         nestedGroup.amountParam = layer.getParam("amount");
         nestedGroup.transformParam = layer.getParam("transformation");
+        nestedGroup.timeOffsetParam = layer.getParam("time_offset");
+        nestedGroup.timeDilationParam = layer.getParam("time_dilation");
         nestedGroup.nestedScaleFactor = scaleFactor;
         nestedGroup.nestedCx = canvasCenterX;
         nestedGroup.nestedCy = canvasCenterY;
@@ -677,6 +832,8 @@ public class SifAnimation extends Container<Group> {
 
         switchGroup.amountParam = layer.getParam("amount");
         switchGroup.transformParam = layer.getParam("transformation");
+        switchGroup.timeOffsetParam = layer.getParam("time_offset");
+        switchGroup.timeDilationParam = layer.getParam("time_dilation");
 
         switchGroup.switchLayerParam = layer.getParam("layer");
         if (switchGroup.switchLayerParam == null) {
@@ -770,26 +927,66 @@ public class SifAnimation extends Container<Group> {
     }
 
     private void updateDuration(Layer layer) {
+        updateDuration(layer, 0f, 1f);
+    }
+
+    /**
+     * @param parentOffset the time_offset (seconds) accumulated from enclosing group/switch
+     *                      layers, mapping this layer's local waypoint times back into root time
+     * @param parentDilation the time_dilation accumulated from enclosing group/switch layers
+     */
+    private void updateDuration(Layer layer, float parentOffset, float parentDilation) {
         Param tx = layer.getParam("transformation");
         if (tx != null && tx.getValue() != null) {
-            duration = Math.max(duration, SifImage.getMaxTime(tx.getValue(), fps));
+            duration = Math.max(duration, toRootTime(SifImage.getMaxTime(tx.getValue(), fps), parentOffset, parentDilation));
         }
         Param amt = layer.getParam("amount");
         if (amt != null && amt.getValue() != null) {
-            duration = Math.max(duration, SifImage.getMaxTime(amt.getValue(), fps));
+            duration = Math.max(duration, toRootTime(SifImage.getMaxTime(amt.getValue(), fps), parentOffset, parentDilation));
         }
         Param sw = layer.getParam("layer");
         if (sw == null) sw = layer.getParam("layer_name");
         if (sw == null) sw = layer.getParam("active_layer");
         if (sw != null && sw.getValue() != null) {
-            duration = Math.max(duration, SifImage.getMaxTime(sw.getValue(), fps));
+            duration = Math.max(duration, toRootTime(SifImage.getMaxTime(sw.getValue(), fps), parentOffset, parentDilation));
         }
 
         if (layer.getChildCanvas() != null) {
+            float childOffset = parentOffset;
+            float childDilation = parentDilation;
+
+            String type = layer.getType() == null ? "" : layer.getType();
+            if ("group".equals(type) || "switch".equals(type) || "pastecanvas".equals(type)) {
+                float ownOffset = 0f;
+                Param offsetParam = layer.getParam("time_offset");
+                if (offsetParam != null && offsetParam.getValue() != null) {
+                    ownOffset = SifTimeUtils.parseTime(offsetParam.getValue().getTimeRaw(), fps);
+                }
+                float ownDilation = 1f;
+                Param dilationParam = layer.getParam("time_dilation");
+                if (dilationParam != null && dilationParam.getValue() != null && dilationParam.getValue().getDoubleValue() != null) {
+                    ownDilation = dilationParam.getValue().getDoubleValue().floatValue();
+                }
+                // Forward mapping so far: thisLocalTime = rootTime * parentDilation + parentOffset.
+                // Descending one more level: childTime = thisLocalTime * ownDilation + ownOffset
+                //   = rootTime * (parentDilation*ownDilation) + (parentOffset*ownDilation + ownOffset)
+                childDilation = parentDilation * ownDilation;
+                childOffset = parentOffset * ownDilation + ownOffset;
+            }
+
             for (Layer childLayer : layer.getChildCanvas().getLayers()) {
-                updateDuration(childLayer);
+                updateDuration(childLayer, childOffset, childDilation);
             }
         }
+    }
+
+    /**
+     * Maps a waypoint time expressed in this layer's local time-space back to
+     * root time-space, inverting the forward mapping localTime = rootTime*dilation + offset.
+     */
+    private static float toRootTime(float localTime, float offset, float dilation) {
+        if (dilation == 0f) return localTime + offset;
+        return (localTime - offset) / dilation;
     }
 
     private static class MusicEvent {

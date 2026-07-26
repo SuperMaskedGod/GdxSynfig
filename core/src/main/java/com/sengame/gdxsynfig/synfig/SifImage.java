@@ -1,5 +1,7 @@
 package com.sengame.gdxsynfig.synfig;
 
+import com.badlogic.gdx.graphics.g2d.Batch;
+import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.ui.Image;
@@ -14,6 +16,7 @@ public class SifImage extends Image {
     private final float scaleFactor;
     private final float canvasCenterX;
     private final float canvasCenterY;
+    private float trueAmount = 1f;
 
     public SifImage(Layer layer, TextureRegion region, float scaleFactor, float canvasCenterX, float canvasCenterY) {
         super(region);
@@ -30,12 +33,29 @@ public class SifImage extends Image {
         applyState(this, currentTime, fps, amountParam, transformParam, scaleFactor, canvasCenterX, canvasCenterY);
     }
 
+    @Override
+    public void draw(Batch batch, float parentAlpha) {
+        if (trueAmount > 1f && batch instanceof SpriteBatch) {
+            SpriteBatch spriteBatch = (SpriteBatch) batch;
+            AlphaOverflowShader.begin(spriteBatch, trueAmount);
+            super.draw(batch, parentAlpha);
+            AlphaOverflowShader.end(batch);
+        } else {
+            super.draw(batch, parentAlpha);
+        }
+    }
+
     public static void applyState(Actor target, float time, float fps, Param amountParam, Param transformParam, float scaleFactor, float cx, float cy) {
         float alpha = 1f;
         if (amountParam != null && amountParam.getValue() != null) {
             alpha = evaluateScalar(amountParam.getValue(), time, fps, 1f);
         }
-        target.getColor().a = alpha;
+        if (target instanceof SifImage) {
+            ((SifImage) target).trueAmount = alpha;
+        } else if (target instanceof SifAnimation) {
+            ((SifAnimation) target).trueAmount = alpha;
+        }
+        target.getColor().a = Math.max(0f, Math.min(1f, alpha));
 
         if (transformParam == null || transformParam.getValue() == null) {
             target.setPosition(cx - target.getOriginX(), cy - target.getOriginY());
