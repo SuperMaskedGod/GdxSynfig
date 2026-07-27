@@ -21,13 +21,13 @@ dependencies {
 
 - 🔊 Sounds, including delayed sound triggers
 - 🖼️ Images
-- 🎚️ Opacity
+- 🎚️ Opacity, Alpha overflow (you can brighten animation by pushing its alpha over 1)
 - 📍 Origin
 - 🔄 Transformations
 - 👁️ Active layer toggling
 - 🔀 Switch groups / layers
 - 📦 Groups / layers
-- 🔁 Time loops, reversing
+- 🔁 Time offset, Time loop Layer, Reversing animation, SeekTo, Stroboscope Time Layer, Free Time Layer
 - 📈 Interpolations
 - 📄 `.sif and .sifz` file parsing
 
