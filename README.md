@@ -76,27 +76,6 @@ animation.seekTo(animation.getDuration());
 
 There's no dedicated "skipToEnd or Finish" call, seek to the animation's duration to end it immediately.
 
----
-
-## Sizing & Scaling
-
-| Method | Behavior |
-|---|---|
-| `setSize(width, height)` | Sets the **clip size**, aka the container's visible bounds. Content outside this size is **clipped/cropped**, if the size is smaller than the animations canvas size it will clip. |
-| `setAnimationSize(width, height)` | **Scales** the animation to fit the given size, without clipping. **Use this one.** |
-| `canvas.getWidth()` / `canvas.getHeight()` | The animation's **actual, native size**, as in Synfig. |
-
-**Remember:** if you want to scale an animation, always scale relative to `canvas.getWidth()` / `canvas.getHeight()` or more accuratly the aspect ratio not an arbitrary target size or you'll get distortion or unwanted cropping.
-
-```java
-canvas.getWidth() = 500; canvas.getHeight() = 800;
-
-//Try to maintain the aspect ratio when setting the size, if you don't, it'll stretch the animation
-animation.setAnimationSize(250, 400);
-
-//Or you can stretch to a cube shape
-animation.setAnimationSize(400,400);
-```
 
 ---
 
