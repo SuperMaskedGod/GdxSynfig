@@ -16,12 +16,15 @@ import com.badlogic.gdx.scenes.scene2d.ui.Container;
 import com.badlogic.gdx.scenes.scene2d.utils.SpriteDrawable;
 import com.badlogic.gdx.utils.Array;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class SifAnimation extends Container<Group> {
     private static final int MAX_GROUP_NESTING_DEPTH = 32;
     private final boolean isRoot;
     public final Array<Texture> locallyCreatedTextures;
+    private final Map<String, Texture> locallyCreatedTextureMap;
     public final Array<Music> locallyCreatedMusic;
     private final AssetManager assetManagerRef;
     private final Array<MusicEvent> musicEvents = new Array<>();
@@ -179,6 +182,7 @@ public class SifAnimation extends Container<Group> {
     public SifAnimation(SifCanvas canvas, FileHandle folderPath, FileHandle audioFolderPath, AssetManager assetManager, Texture.TextureFilter minFilter, Texture.TextureFilter magFilter) {
         this.isRoot = true;
         this.locallyCreatedTextures = new Array<>();
+        this.locallyCreatedTextureMap = new HashMap<>();
         this.locallyCreatedMusic = new Array<>();
         this.assetManagerRef = assetManager;
         this.minFilter = minFilter;
@@ -198,9 +202,10 @@ public class SifAnimation extends Container<Group> {
         init(canvas, folderPath, audioFolderPath, assetManager);
     }
 
-    private SifAnimation(Array<Texture> sharedTextures, Array<Music> sharedMusic, AssetManager assetManager, Array<SifImage> sharedImages, Texture.TextureFilter minFilter, Texture.TextureFilter magFilter) {
+    private SifAnimation(Array<Texture> sharedTextures, Map<String, Texture> sharedTextureMap, Array<Music> sharedMusic, AssetManager assetManager, Array<SifImage> sharedImages, Texture.TextureFilter minFilter, Texture.TextureFilter magFilter) {
         this.isRoot = false;
         this.locallyCreatedTextures = sharedTextures;
+        this.locallyCreatedTextureMap = sharedTextureMap;
         this.locallyCreatedMusic = sharedMusic;
         this.assetManagerRef = assetManager;
         this.minFilter = minFilter;
@@ -509,7 +514,11 @@ public class SifAnimation extends Container<Group> {
         }
     }
 
-    private static class TimeLoop {
+    private interface TimeTransform {
+        float apply(float time);
+    }
+
+    private static class TimeLoop implements TimeTransform {
         final float linkTime;
         final float localTime;
         final float duration;
@@ -521,7 +530,8 @@ public class SifAnimation extends Container<Group> {
             this.symmetrical = symmetrical;
         }
 
-        float apply(float time) {
+        @Override
+        public float apply(float time) {
             if (duration <= 0) return time;
             float delta = time - linkTime;
             if (symmetrical) {
@@ -536,10 +546,47 @@ public class SifAnimation extends Container<Group> {
         }
     }
 
+    private static class Stroboscope implements TimeTransform {
+        private final ValueNode frequencyNode;
+        private final float fpsRef;
+
+        Stroboscope(ValueNode frequencyNode, float fpsRef) {
+            this.frequencyNode = frequencyNode;
+            this.fpsRef = fpsRef;
+        }
+
+        @Override
+        public float apply(float time) {
+            float frequency = 1f;
+            if (frequencyNode != null) {
+                Double v = frequencyNode.isAnimated()
+                    ? evaluateAnimatedScalar(frequencyNode, time, fpsRef, 1f)
+                    : frequencyNode.getDoubleValue();
+                if (v != null) frequency = v.floatValue();
+            }
+            if (frequency <= 0f) return time;
+            return (float) Math.floor(time * frequency) / frequency;
+        }
+    }
+
+    private static class FreeTime implements TimeTransform {
+        private final ValueNode timeNode;
+        private final float fpsRef;
+
+        FreeTime(ValueNode timeNode, float fpsRef) {
+            this.timeNode = timeNode;
+            this.fpsRef = fpsRef;
+        }
+
+        @Override
+        public float apply(float time) {
+            if (timeNode == null) return time;
+            return evaluateAnimatedTime(timeNode, time, fpsRef);
+        }
+    }
+
     private final Array<Object> childItems;
-
-    private final java.util.IdentityHashMap<Object, Array<TimeLoop>> timeLoopChains = new java.util.IdentityHashMap<>();
-
+    private final java.util.IdentityHashMap<Object, Array<TimeTransform>> timeLoopChains = new java.util.IdentityHashMap<>();
     private float currentGroupTime = 0f;
 
     private void precomputeTimeLoopChains() {
@@ -547,11 +594,11 @@ public class SifAnimation extends Container<Group> {
             Object item = childItems.get(i);
             if (!(item instanceof Actor) && !(item instanceof MusicEvent)) continue;
 
-            Array<TimeLoop> chain = new Array<>();
+            Array<TimeTransform> chain = new Array<>();
             for (int j = childItems.size - 1; j > i; j--) {
                 Object above = childItems.get(j);
-                if (above instanceof TimeLoop) {
-                    chain.add((TimeLoop) above);
+                if (above instanceof TimeTransform) {
+                    chain.add((TimeTransform) above);
                 }
             }
             timeLoopChains.put(item, chain);
@@ -559,11 +606,11 @@ public class SifAnimation extends Container<Group> {
     }
 
     private float applyTimeLoopChain(Object item, float time) {
-        Array<TimeLoop> chain = timeLoopChains.get(item);
+        Array<TimeTransform> chain = timeLoopChains.get(item);
         if (chain == null) return time;
         float effectiveTime = time;
-        for (TimeLoop tl : chain) {
-            effectiveTime = tl.apply(effectiveTime);
+        for (TimeTransform tt : chain) {
+            effectiveTime = tt.apply(effectiveTime);
         }
         return effectiveTime;
     }
@@ -594,9 +641,6 @@ public class SifAnimation extends Container<Group> {
                 ((SifImage) actor).updateAnimation(effectiveTime, fps);
             } else if (actor instanceof SifAnimation) {
                 SifAnimation group = (SifAnimation) actor;
-                // The group's own transformation/amount (origin, angle, scale, opacity)
-                // are driven by the parent-space time; per Synfig, time_offset/time_dilation
-                // only affect the group's *contents*, not the group layer itself.
                 SifImage.applyState(group, effectiveTime, fps, group.getAmountParam(), group.getTransformParam(), group.getScaleFactor(), group.getCanvasCenterX(), group.getCanvasCenterY());
                 float childTime = group.resolveLocalTime(effectiveTime);
                 group.updateTree(childTime);
@@ -647,6 +691,12 @@ public class SifAnimation extends Container<Group> {
                     break;
                 case "timeloop":
                     handleTimeLoopLayer(layer);
+                    break;
+                case "stroboscope":
+                    handleStroboscopeLayer(layer);
+                    break;
+                case "freetime":
+                    handleFreeTimeLayer(layer);
                     break;
                 default:
                     handleImageLayer(layer, assetManager, folderPath, scaleFactor, canvasCenterX, canvasCenterY, masterImageList);
@@ -784,7 +834,7 @@ public class SifAnimation extends Container<Group> {
         SifCanvas childCanvas = layer.getChildCanvas();
         if (childCanvas == null) return;
 
-        SifAnimation nestedGroup = new SifAnimation(locallyCreatedTextures, locallyCreatedMusic, assetManager, masterImageList, minFilter, magFilter);
+        SifAnimation nestedGroup = new SifAnimation(locallyCreatedTextures, locallyCreatedTextureMap, locallyCreatedMusic, assetManager, masterImageList, minFilter, magFilter);
 
         nestedGroup.amountParam = layer.getParam("amount");
         nestedGroup.transformParam = layer.getParam("transformation");
@@ -805,7 +855,7 @@ public class SifAnimation extends Container<Group> {
         SifCanvas childCanvas = layer.getChildCanvas();
         if (childCanvas == null) return;
 
-        SifAnimation switchGroup = new SifAnimation(locallyCreatedTextures, locallyCreatedMusic, assetManager, masterImageList, minFilter, magFilter);
+        SifAnimation switchGroup = new SifAnimation(locallyCreatedTextures, locallyCreatedTextureMap, locallyCreatedMusic, assetManager, masterImageList, minFilter, magFilter);
 
         switchGroup.amountParam = layer.getParam("amount");
         switchGroup.transformParam = layer.getParam("transformation");
@@ -903,6 +953,22 @@ public class SifAnimation extends Container<Group> {
         childItems.add(tl);
     }
 
+    private void handleStroboscopeLayer(Layer layer) {
+        Param frequencyParam = layer.getParam("frequency");
+        ValueNode frequencyNode = frequencyParam != null ? frequencyParam.getValue() : null;
+
+        Stroboscope strobe = new Stroboscope(frequencyNode, fps);
+        childItems.add(strobe);
+    }
+
+    private void handleFreeTimeLayer(Layer layer) {
+        Param timeParam = layer.getParam("time");
+        ValueNode timeNode = timeParam != null ? timeParam.getValue() : null;
+
+        FreeTime freeTime = new FreeTime(timeNode, fps);
+        childItems.add(freeTime);
+    }
+
     private void updateDuration(Layer layer) {
         updateDuration(layer, 0f, 1f);
     }
@@ -949,7 +1015,7 @@ public class SifAnimation extends Container<Group> {
             }
         }
     }
-    
+
     private static float toRootTime(float localTime, float offset, float dilation) {
         if (dilation == 0f) return localTime + offset;
         return (localTime - offset) / dilation;
@@ -978,8 +1044,16 @@ public class SifAnimation extends Container<Group> {
             tex = assetManager.get(path, Texture.class);
         } else {
             if (!file.exists()) return null;
-            tex = new Texture(file);
-            locallyCreatedTextures.add(tex);
+            String path = file.path();
+            if (locallyCreatedTextureMap != null && locallyCreatedTextureMap.containsKey(path)) {
+                tex = locallyCreatedTextureMap.get(path);
+            } else {
+                tex = new Texture(file);
+                locallyCreatedTextures.add(tex);
+                if (locallyCreatedTextureMap != null) {
+                    locallyCreatedTextureMap.put(path, tex);
+                }
+            }
         }
 
         if (minFilter != null) {
@@ -1051,6 +1125,8 @@ public class SifAnimation extends Container<Group> {
                     break;
                 }
                 case "timeloop":
+                case "stroboscope":
+                case "freetime":
                     break;
                 default: {
                     String layerName = layer.getDesc();
@@ -1096,6 +1172,7 @@ public class SifAnimation extends Container<Group> {
         if (assetManagerRef == null) {
             for (Texture tex : locallyCreatedTextures) tex.dispose();
             locallyCreatedTextures.clear();
+            if (locallyCreatedTextureMap != null) locallyCreatedTextureMap.clear();
             for (Music music : locallyCreatedMusic) music.dispose();
             locallyCreatedMusic.clear();
         }
