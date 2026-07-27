@@ -93,7 +93,7 @@ animation.swapTexture(index, newTexture);
 
 ```java
 //Parse
-SifCanvas canvas = SifParser.parse(Gdx.files.internal("anim.sif"));
+SifCanvas canvas = SifParser.parse(Gdx.files.internal("anim.sif or sifz"));
 
 //Load assets (static, no instance needed)
 Array<String> assets = SifAnimation.loadAssets(canvas, imagePath, audioPath, assetManager);
@@ -102,8 +102,8 @@ Array<String> assets = SifAnimation.loadAssets(canvas, imagePath, audioPath, ass
 SifAnimation animation = new SifAnimation(canvas);
 animation.play();
 
-//Scale correctly (no clipping)
-animation.setAnimationSize(targetWidth, targetHeight);
+//Sets size, animations are automatically compatible with Tables
+animation.setSize(targetWidth, targetHeight);
 
 //Skip to end
 animation.seekTo(animation.getDuration());
