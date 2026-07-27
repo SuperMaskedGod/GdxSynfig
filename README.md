@@ -10,7 +10,7 @@ Load and play `.sif` Synfig animations natively in your libGDX project, the sifA
 
 ```java
 dependencies {
-  api 'com.github.SuperMaskedGod:GdxSynfig:1.1.1'
+  api 'com.github.SuperMaskedGod:GdxSynfig:1.2.5'
 }
 ```
  `Into your core build.gradle, Latest`
