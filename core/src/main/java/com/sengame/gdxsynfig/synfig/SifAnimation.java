@@ -15,7 +15,6 @@ import com.badlogic.gdx.scenes.scene2d.Group;
 import com.badlogic.gdx.scenes.scene2d.ui.Container;
 import com.badlogic.gdx.scenes.scene2d.utils.SpriteDrawable;
 import com.badlogic.gdx.utils.Array;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -243,6 +242,46 @@ public class SifAnimation extends Container<Group> {
         populateActors(canvas, folderPath, audioFolderPath, assetManager, scaleFactor, baseWidth / 2f, baseHeight / 2f, 0, this.musicEvents, this.allImages);
 
         updateTree(0f);
+    }
+
+    //Allows for Table and actual resizing support, setSize actually sets the size and doesn't clip
+    private boolean scaleToFit = false;
+    private void setScaleToFit(boolean scaleToFit) {
+        this.scaleToFit = scaleToFit;
+        invalidate();
+    }
+
+    @Override
+    public void layout() {
+        super.layout();
+
+        if (contentGroup != null) {
+            if (scaleToFit) {
+                float scaleX = getWidth() / baseWidth;
+                float scaleY = getHeight() / baseHeight;
+                contentGroup.setScale(scaleX, scaleY);
+            } else {
+                contentGroup.setScale(1f, 1f);
+            }
+        }
+    }
+
+    @Override
+    public void setSize(float width, float height) {
+        setScaleToFit(true);
+        super.setSize(width, height);
+    }
+
+    @Override
+    public void setWidth(float width) {
+        setScaleToFit(true);
+        super.setWidth(width);
+    }
+
+    @Override
+    public void setHeight(float height) {
+        setScaleToFit(true);
+        super.setHeight(height);
     }
 
     /**
@@ -1156,16 +1195,6 @@ public class SifAnimation extends Container<Group> {
         float baseScale = sifWidth / viewboxWidth;
         float ratio = targetStageWidth / sifWidth;
         return baseScale * ratio;
-    }
-
-    /**
-     * Sets the scale of the animation based off the given values, this is a container so setSize sets the clip size not the actual animation size, use this method to set the size and use setSize to clip.
-     * @param width
-     * @param height
-     */
-    public void setAnimationSize(float width, float height){
-        //Converts the width height you put into a scale since this is a container and changing its size clips it.
-        setScale(width/Float.parseFloat(canvas.getWidth()), height/Float.parseFloat(canvas.getHeight()));
     }
 
     public void dispose() {
