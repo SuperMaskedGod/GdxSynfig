@@ -2,7 +2,7 @@
 
 A [Synfig Studio](https://www.synfig.org/) animation runtime for [libGDX](https://libgdx.com/).
 
-Load and play `.sif` Synfig animations natively in your libGDX project, the sifAnimation acts as if its a image and is seamless.
+Load and play `.sif or .sifz` Synfig animations natively in your libGDX project, the sifAnimation acts as if its a image and is seamless.
 
 **Platforms:** Android · iOS · Windows · Linux · macOS · GWT/HTML
 
