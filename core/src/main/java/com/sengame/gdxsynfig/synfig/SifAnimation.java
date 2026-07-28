@@ -236,7 +236,8 @@ public class SifAnimation extends Container<Group> {
         contentGroup.setOrigin(baseWidth / 2f, baseHeight / 2f);
         setOrigin(baseWidth / 2f, baseHeight / 2f);
 
-        fill();
+        //Remove fill, its why we couldn't resize higher but we could resize lower, (resize higher clipped)
+        //fill();
 
         float scaleFactor = calculateScaleFromCanvas(canvas, baseWidth);
         populateActors(canvas, folderPath, audioFolderPath, assetManager, scaleFactor, baseWidth / 2f, baseHeight / 2f, 0, this.musicEvents, this.allImages);
@@ -244,7 +245,6 @@ public class SifAnimation extends Container<Group> {
         updateTree(0f);
     }
 
-    //Allows for Table and actual resizing support, setSize actually sets the size and doesn't clip
     private boolean scaleToFit = false;
     private void setScaleToFit(boolean scaleToFit) {
         this.scaleToFit = scaleToFit;
@@ -562,6 +562,7 @@ public class SifAnimation extends Container<Group> {
         final float localTime;
         final float duration;
         final boolean symmetrical;
+
         TimeLoop(float linkTime, float localTime, float duration, boolean symmetrical) {
             this.linkTime = linkTime;
             this.localTime = localTime;
@@ -572,16 +573,9 @@ public class SifAnimation extends Container<Group> {
         @Override
         public float apply(float time) {
             if (duration <= 0) return time;
-            float delta = time - linkTime;
-            if (symmetrical) {
-                float period = 2 * duration;
-                float mod = ((delta % period) + period) % period;
-                if (mod > duration) mod = period - mod;
-                return localTime + mod;
-            } else {
-                float mod = ((delta % duration) + duration) % duration;
-                return localTime + mod;
-            }
+            float delta = time - localTime;
+            float mod = ((delta % duration) + duration) % duration;
+            return linkTime + mod;
         }
     }
 
@@ -678,6 +672,8 @@ public class SifAnimation extends Container<Group> {
 
             if (actor instanceof SifImage) {
                 ((SifImage) actor).updateAnimation(effectiveTime, fps);
+            } else if (actor instanceof SifShape) {
+                ((SifShape) actor).updateAnimation(effectiveTime, fps);
             } else if (actor instanceof SifAnimation) {
                 SifAnimation group = (SifAnimation) actor;
                 SifImage.applyState(group, effectiveTime, fps, group.getAmountParam(), group.getTransformParam(), group.getScaleFactor(), group.getCanvasCenterX(), group.getCanvasCenterY());
@@ -736,6 +732,11 @@ public class SifAnimation extends Container<Group> {
                     break;
                 case "freetime":
                     handleFreeTimeLayer(layer);
+                    break;
+                case "star":
+                case "circle":
+                case "rectangle":
+                    handleShapeLayer(layer, scaleFactor, canvasCenterX, canvasCenterY);
                     break;
                 default:
                     handleImageLayer(layer, assetManager, folderPath, scaleFactor, canvasCenterX, canvasCenterY, masterImageList);
@@ -935,6 +936,13 @@ public class SifAnimation extends Container<Group> {
         this.childItems.add(animatedImage);
     }
 
+    private void handleShapeLayer(Layer layer, float scaleFactor, float canvasCenterX, float canvasCenterY) {
+        SifShape shape = new SifShape(layer, scaleFactor, canvasCenterX, canvasCenterY);
+        shape.setUserObject(layer.getDesc());
+        this.contentGroup.addActor(shape);
+        this.childItems.add(shape);
+    }
+
     private void handleMusicLayer(Layer layer, AssetManager assetManager, FileHandle audioFolderPath, Array<MusicEvent> masterMusicList) {
         String soundName = layer.getDesc();
         if (soundName == null || soundName.isEmpty()) return;
@@ -1026,6 +1034,9 @@ public class SifAnimation extends Container<Group> {
         if (sw == null) sw = layer.getParam("active_layer");
         if (sw != null && sw.getValue() != null) {
             duration = Math.max(duration, toRootTime(SifImage.getMaxTime(sw.getValue(), fps), parentOffset, parentDilation));
+        }
+        if (SifShape.isShapeLayer(layer.getType())) {
+            duration = Math.max(duration, toRootTime(SifShape.getMaxTime(layer, fps), parentOffset, parentDilation));
         }
 
         if (layer.getChildCanvas() != null) {

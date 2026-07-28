@@ -12,6 +12,10 @@ public class ValueNode {
     private Double x;
     private Double y;
     private Double z;
+    private Double r;
+    private Double g;
+    private Double b;
+    private Double a;
     private final Map<String, ValueNode> namedChildren = new LinkedHashMap<>();
     private final List<Waypoint> waypoints = new ArrayList<>();
     private SifCanvas nestedCanvas;
@@ -62,6 +66,38 @@ public class ValueNode {
 
     public void setZ(Double z) {
         this.z = z;
+    }
+
+    public Double getR() {
+        return r;
+    }
+
+    public void setR(Double r) {
+        this.r = r;
+    }
+
+    public Double getG() {
+        return g;
+    }
+
+    public void setG(Double g) {
+        this.g = g;
+    }
+
+    public Double getB() {
+        return b;
+    }
+
+    public void setB(Double b) {
+        this.b = b;
+    }
+
+    public Double getA() {
+        return a;
+    }
+
+    public void setA(Double a) {
+        this.a = a;
     }
 
     public Map<String, ValueNode> getNamedChildren() {
@@ -147,6 +183,7 @@ public class ValueNode {
         StringBuilder sb = new StringBuilder(type == null ? "?" : type);
         if (!attributes.isEmpty()) sb.append(attributes);
         if (x != null || y != null) sb.append("(x=").append(x).append(",y=").append(y).append(")");
+        if (r != null || g != null || b != null || a != null) sb.append("(r=").append(r).append(",g=").append(g).append(",b=").append(b).append(",a=").append(a).append(")");
         if (textContent != null) sb.append("=\"").append(textContent).append('"');
         if (isAnimated()) sb.append("[").append(waypoints.size()).append(" waypoints]");
         if (!namedChildren.isEmpty()) sb.append(namedChildren.keySet());

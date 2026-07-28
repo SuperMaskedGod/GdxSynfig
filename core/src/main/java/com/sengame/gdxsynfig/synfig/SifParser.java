@@ -118,6 +118,13 @@ public final class SifParser {
                 node.setZ(childDouble(el, "z"));
                 break;
             }
+            case "color": {
+                node.setR(childDouble(el, "r"));
+                node.setG(childDouble(el, "g"));
+                node.setB(childDouble(el, "b"));
+                node.setA(childDouble(el, "a"));
+                break;
+            }
             case "composite": {
                 for (int i = 0; i < el.getChildCount(); i++) {
                     Element wrapper = el.getChild(i);
