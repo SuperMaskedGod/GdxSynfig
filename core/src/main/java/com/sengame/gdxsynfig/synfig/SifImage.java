@@ -14,6 +14,13 @@ public class SifImage extends Image {
     private final float canvasCenterY;
     private float trueAmount = 1f;
 
+    private static final ThreadLocal<float[]> SCRATCH_XY = new ThreadLocal<float[]>() {
+        @Override
+        protected float[] initialValue() {
+            return new float[2];
+        }
+    };
+
     public SifImage(Layer layer, TextureRegion region, float scaleFactor, float canvasCenterX, float canvasCenterY) {
         super(region);
         this.amountParam = layer.getParam("amount");
@@ -59,14 +66,15 @@ public class SifImage extends Image {
         }
 
         ValueNode tNode = transformParam.getValue();
+        float[] xy = SCRATCH_XY.get();
 
         ValueNode offsetNode = tNode.getNamedChild("offset");
         float x = cx - target.getOriginX();
         float y = cy - target.getOriginY();
         if (offsetNode != null) {
-            float[] offsetXY = SifAnimMath.evaluateXY(offsetNode, time, fps, 0f, 0f);
-            x += offsetXY[0] * scaleFactor;
-            y += offsetXY[1] * scaleFactor;
+            SifAnimMath.evaluateXYInto(offsetNode, time, fps, 0f, 0f, xy);
+            x += xy[0] * scaleFactor;
+            y += xy[1] * scaleFactor;
         }
         target.setPosition(x, y);
 
@@ -78,9 +86,9 @@ public class SifImage extends Image {
         float scaleX = 1f;
         float scaleY = 1f;
         if (scaleNode != null) {
-            float[] scaleXY = SifAnimMath.evaluateXY(scaleNode, time, fps, 1f, 1f);
-            scaleX = scaleXY[0];
-            scaleY = scaleXY[1];
+            SifAnimMath.evaluateXYInto(scaleNode, time, fps, 1f, 1f, xy);
+            scaleX = xy[0];
+            scaleY = xy[1];
         }
         target.setScale(scaleX, scaleY);
     }

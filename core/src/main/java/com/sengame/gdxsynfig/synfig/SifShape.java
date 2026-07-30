@@ -11,6 +11,8 @@ import com.badlogic.gdx.utils.ShortArray;
 
 public class SifShape extends Actor {
     private static ShapeRenderer sharedRenderer;
+    private static final EarClippingTriangulator SHARED_TRIANGULATOR = new EarClippingTriangulator();
+    private static final float INVERT_FILL_HALF_EXTENT = 100000f;
     private final String shapeType;
     private final Param colorParam;
     private final Param amountParam;
@@ -23,13 +25,19 @@ public class SifShape extends Actor {
     private final Param radiusParam;
     private final Param point1Param;
     private final Param point2Param;
+    private final Param invertParam;
     private final float scaleFactor;
     private final float canvasCenterX;
     private final float canvasCenterY;
-    private final EarClippingTriangulator triangulator = new EarClippingTriangulator();
     private final Color currentColor = new Color(1f, 1f, 1f, 1f);
+    private final float[] colorScratch = new float[4];
+    private final float[] xyScratch = new float[2];
     private float currentAlpha = 1f;
     private float[] currentVertices = new float[0];
+    private ShortArray cachedTriangles;
+    private int cachedPointCount = -1;
+    private boolean cachedRegular;
+    private boolean currentInvert = false;
     private float currentX;
     private float currentY;
     private float currentWidth;
@@ -49,6 +57,7 @@ public class SifShape extends Actor {
         this.radiusParam = layer.getParam("radius");
         this.point1Param = layer.getParam("point1");
         this.point2Param = layer.getParam("point2");
+        this.invertParam = layer.getParam("invert");
         this.scaleFactor = scaleFactor;
         this.canvasCenterX = canvasCenterX;
         this.canvasCenterY = canvasCenterY;
@@ -59,11 +68,16 @@ public class SifShape extends Actor {
             ? SifAnimMath.evaluateScalar(amountParam.getValue(), time, fps, 1f) : 1f;
         currentAlpha = Math.max(0f, Math.min(1f, alpha));
 
-        float[] col = (colorParam != null && colorParam.getValue() != null)
-            ? SifAnimMath.evaluateColor(colorParam.getValue(), time, fps, 1f, 1f, 1f, 1f)
-            : new float[]{1f, 1f, 1f, 1f};
-        currentColor.set(col[0], col[1], col[2], col[3]);
+        if (colorParam != null && colorParam.getValue() != null) {
+            SifAnimMath.evaluateColorInto(colorParam.getValue(), time, fps, 1f, 1f, 1f, 1f, colorScratch);
+            currentColor.set(colorScratch[0], colorScratch[1], colorScratch[2], colorScratch[3]);
+        } else {
+            currentColor.set(1f, 1f, 1f, 1f);
+        }
         getColor().a = currentAlpha;
+
+        currentInvert = (invertParam != null && invertParam.getValue() != null)
+            && SifAnimMath.evaluateBoolean(invertParam.getValue(), time, fps, false);
 
         if ("star".equals(shapeType)) {
             updateStar(time, fps);
@@ -75,8 +89,13 @@ public class SifShape extends Actor {
     }
 
     private void updateStar(float time, float fps) {
-        float[] origin = (originParam != null && originParam.getValue() != null)
-            ? SifAnimMath.evaluateXY(originParam.getValue(), time, fps, 0f, 0f) : new float[]{0f, 0f};
+        float[] origin = xyScratch;
+        if (originParam != null && originParam.getValue() != null) {
+            SifAnimMath.evaluateXYInto(originParam.getValue(), time, fps, 0f, 0f, origin);
+        } else {
+            origin[0] = 0f;
+            origin[1] = 0f;
+        }
         float r1 = (radius1Param != null && radius1Param.getValue() != null)
             ? SifAnimMath.evaluateScalar(radius1Param.getValue(), time, fps, 1f) : 1f;
         float r2 = (radius2Param != null && radius2Param.getValue() != null)
@@ -93,7 +112,11 @@ public class SifShape extends Actor {
         currentY = canvasCenterY + origin[1] * scaleFactor;
 
         int vertexCount = points * 2;
-        float[] verts = new float[vertexCount * 2];
+        int requiredLength = vertexCount * 2;
+        if (currentVertices.length != requiredLength) {
+            currentVertices = new float[requiredLength];
+        }
+        float[] verts = currentVertices;
         float angleRad = (float) Math.toRadians(angleDeg);
         float step = (float) Math.PI / points;
         for (int i = 0; i < vertexCount; i++) {
@@ -102,12 +125,22 @@ public class SifShape extends Actor {
             verts[i * 2] = (float) Math.cos(vAngle) * radius * scaleFactor;
             verts[i * 2 + 1] = (float) Math.sin(vAngle) * radius * scaleFactor;
         }
-        currentVertices = verts;
+
+        if (cachedTriangles == null || cachedPointCount != points || cachedRegular != regular) {
+            cachedTriangles = SHARED_TRIANGULATOR.computeTriangles(verts);
+            cachedPointCount = points;
+            cachedRegular = regular;
+        }
     }
 
     private void updateCircle(float time, float fps) {
-        float[] origin = (originParam != null && originParam.getValue() != null)
-            ? SifAnimMath.evaluateXY(originParam.getValue(), time, fps, 0f, 0f) : new float[]{0f, 0f};
+        float[] origin = xyScratch;
+        if (originParam != null && originParam.getValue() != null) {
+            SifAnimMath.evaluateXYInto(originParam.getValue(), time, fps, 0f, 0f, origin);
+        } else {
+            origin[0] = 0f;
+            origin[1] = 0f;
+        }
         float radius = (radiusParam != null && radiusParam.getValue() != null)
             ? SifAnimMath.evaluateScalar(radiusParam.getValue(), time, fps, 1f) : 1f;
 
@@ -117,15 +150,29 @@ public class SifShape extends Actor {
     }
 
     private void updateRectangle(float time, float fps) {
-        float[] p1 = (point1Param != null && point1Param.getValue() != null)
-            ? SifAnimMath.evaluateXY(point1Param.getValue(), time, fps, 0f, 0f) : new float[]{0f, 0f};
-        float[] p2 = (point2Param != null && point2Param.getValue() != null)
-            ? SifAnimMath.evaluateXY(point2Param.getValue(), time, fps, 0f, 0f) : new float[]{0f, 0f};
+        float[] p1 = xyScratch;
+        float p1x, p1y, p2x, p2y;
+        if (point1Param != null && point1Param.getValue() != null) {
+            SifAnimMath.evaluateXYInto(point1Param.getValue(), time, fps, 0f, 0f, p1);
+            p1x = p1[0];
+            p1y = p1[1];
+        } else {
+            p1x = 0f;
+            p1y = 0f;
+        }
+        if (point2Param != null && point2Param.getValue() != null) {
+            SifAnimMath.evaluateXYInto(point2Param.getValue(), time, fps, 0f, 0f, p1);
+            p2x = p1[0];
+            p2y = p1[1];
+        } else {
+            p2x = 0f;
+            p2y = 0f;
+        }
 
-        float minX = Math.min(p1[0], p2[0]);
-        float maxX = Math.max(p1[0], p2[0]);
-        float minY = Math.min(p1[1], p2[1]);
-        float maxY = Math.max(p1[1], p2[1]);
+        float minX = Math.min(p1x, p2x);
+        float maxX = Math.max(p1x, p2x);
+        float minY = Math.min(p1y, p2y);
+        float maxY = Math.max(p1y, p2y);
 
         currentX = canvasCenterX + minX * scaleFactor;
         currentY = canvasCenterY + minY * scaleFactor;
@@ -145,9 +192,20 @@ public class SifShape extends Actor {
         ShapeRenderer renderer = getRenderer();
         renderer.setProjectionMatrix(batch.getProjectionMatrix());
         renderer.setTransformMatrix(batch.getTransformMatrix());
-        renderer.begin(ShapeRenderer.ShapeType.Filled);
-        renderer.setColor(currentColor.r, currentColor.g, currentColor.b, finalAlpha);
 
+        if (currentInvert) {
+            drawInvertedFill(renderer, finalAlpha);
+        } else {
+            renderer.begin(ShapeRenderer.ShapeType.Filled);
+            renderer.setColor(currentColor.r, currentColor.g, currentColor.b, finalAlpha);
+            drawShapeFill(renderer);
+            renderer.end();
+        }
+
+        batch.begin();
+    }
+
+    private void drawShapeFill(ShapeRenderer renderer) {
         if ("star".equals(shapeType)) {
             drawStar(renderer);
         } else if ("circle".equals(shapeType)) {
@@ -156,22 +214,49 @@ public class SifShape extends Actor {
         } else if ("rectangle".equals(shapeType)) {
             renderer.rect(currentX, currentY, currentWidth, currentHeight);
         }
+    }
 
+    private void drawInvertedFill(ShapeRenderer renderer, float finalAlpha) {
+        Gdx.gl.glEnable(GL20.GL_STENCIL_TEST);
+        Gdx.gl.glClear(GL20.GL_STENCIL_BUFFER_BIT);
+        Gdx.gl.glStencilMask(0xFF);
+        Gdx.gl.glColorMask(false, false, false, false);
+        Gdx.gl.glStencilFunc(GL20.GL_ALWAYS, 1, 0xFF);
+        Gdx.gl.glStencilOp(GL20.GL_KEEP, GL20.GL_KEEP, GL20.GL_REPLACE);
+
+        renderer.begin(ShapeRenderer.ShapeType.Filled);
+        drawShapeFill(renderer);
         renderer.end();
-        batch.begin();
+
+        Gdx.gl.glColorMask(true, true, true, true);
+        Gdx.gl.glStencilFunc(GL20.GL_NOTEQUAL, 1, 0xFF);
+        Gdx.gl.glStencilOp(GL20.GL_KEEP, GL20.GL_KEEP, GL20.GL_KEEP);
+
+        renderer.begin(ShapeRenderer.ShapeType.Filled);
+        renderer.setColor(currentColor.r, currentColor.g, currentColor.b, finalAlpha);
+        renderer.rect(
+            currentX - INVERT_FILL_HALF_EXTENT,
+            currentY - INVERT_FILL_HALF_EXTENT,
+            INVERT_FILL_HALF_EXTENT * 2f,
+            INVERT_FILL_HALF_EXTENT * 2f
+        );
+        renderer.end();
+
+        Gdx.gl.glDisable(GL20.GL_STENCIL_TEST);
     }
 
     private void drawStar(ShapeRenderer renderer) {
-        if (currentVertices.length < 6) return;
-        ShortArray triangles = triangulator.computeTriangles(currentVertices);
+        if (currentVertices.length < 6 || cachedTriangles == null) return;
+        ShortArray triangles = cachedTriangles;
+        float[] verts = currentVertices;
         for (int i = 0; i < triangles.size; i += 3) {
             int a = triangles.get(i) * 2;
             int b = triangles.get(i + 1) * 2;
             int c = triangles.get(i + 2) * 2;
             renderer.triangle(
-                currentX + currentVertices[a], currentY + currentVertices[a + 1],
-                currentX + currentVertices[b], currentY + currentVertices[b + 1],
-                currentX + currentVertices[c], currentY + currentVertices[c + 1]
+                currentX + verts[a], currentY + verts[a + 1],
+                currentX + verts[b], currentY + verts[b + 1],
+                currentX + verts[c], currentY + verts[c + 1]
             );
         }
     }
@@ -189,7 +274,7 @@ public class SifShape extends Actor {
 
     public static float getMaxTime(Layer layer, float fps) {
         float max = 0f;
-        String[] paramNames = {"amount", "color", "origin", "radius1", "radius2", "angle", "points", "radius", "point1", "point2"};
+        String[] paramNames = {"amount", "color", "origin", "radius1", "radius2", "angle", "points", "radius", "point1", "point2", "invert"};
         for (String name : paramNames) {
             Param p = layer.getParam(name);
             if (p != null && p.getValue() != null) {

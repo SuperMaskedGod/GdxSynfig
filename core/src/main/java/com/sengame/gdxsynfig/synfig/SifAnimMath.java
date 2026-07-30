@@ -23,7 +23,11 @@ public final class SifAnimMath {
     private static final Map<List<Waypoint>, int[]> cursorCache = new WeakHashMap<>();
 
     private static int[] cursorFor(List<Waypoint> wps) {
-        return cursorCache.computeIfAbsent(wps, k -> new int[]{0});
+        int[] existing = cursorCache.get(wps);
+        if (existing != null) return existing;
+        int[] created = new int[]{0};
+        cursorCache.put(wps, created);
+        return created;
     }
 
     private static int resolveStartIndex(List<Waypoint> wps, int[] cursor, float time, float fps) {
@@ -117,7 +121,8 @@ public final class SifAnimMath {
         Waypoint next = null;
         int prevIdx = -1;
 
-        for (int i = startIdx; i < wps.size(); i++) {
+        int size = wps.size();
+        for (int i = startIdx; i < size; i++) {
             Waypoint wp = wps.get(i);
             float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
             if (wpTime <= time) {
@@ -167,34 +172,91 @@ public final class SifAnimMath {
         return evaluateScalar(node, time, fps, def, DOUBLE);
     }
 
-    public static float[] evaluateXY(ValueNode node, float time, float fps, float defX, float defY) {
-        if (node == null) return new float[]{defX, defY};
+    public static boolean evaluateBoolean(ValueNode node, float time, float fps, boolean def) {
+        if (node == null) return def;
         if (!node.isAnimated()) {
-            float x = (node.getX() != null) ? node.getX().floatValue() : defX;
-            float y = (node.getY() != null) ? node.getY().floatValue() : defY;
-            return new float[]{x, y};
+            Boolean b = node.getBooleanValue();
+            return b != null ? b : def;
         }
-        return new float[]{
-            interpolate(node.getWaypoints(), time, fps, defX, X),
-            interpolate(node.getWaypoints(), time, fps, defY, Y)
-        };
+        List<Waypoint> wps = node.getWaypoints();
+        if (wps == null || wps.isEmpty()) return def;
+
+        int[] cursor = cursorFor(wps);
+        int startIdx = resolveStartIndex(wps, cursor, time, fps);
+
+        Waypoint prev = null;
+        Waypoint next = null;
+        int prevIdx = -1;
+
+        int size = wps.size();
+        for (int i = startIdx; i < size; i++) {
+            Waypoint wp = wps.get(i);
+            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
+            if (wpTime <= time) {
+                prev = wp;
+                prevIdx = i;
+            } else {
+                next = wp;
+                break;
+            }
+        }
+
+        cursor[0] = Math.max(prevIdx, 0);
+
+        Waypoint chosen = prev != null ? prev : next;
+        if (chosen == null || chosen.getValue() == null) return def;
+        Boolean b = chosen.getValue().getBooleanValue();
+        return b != null ? b : def;
+    }
+
+    public static void evaluateXYInto(ValueNode node, float time, float fps, float defX, float defY, float[] out) {
+        if (node == null) {
+            out[0] = defX;
+            out[1] = defY;
+            return;
+        }
+        if (!node.isAnimated()) {
+            out[0] = (node.getX() != null) ? node.getX().floatValue() : defX;
+            out[1] = (node.getY() != null) ? node.getY().floatValue() : defY;
+            return;
+        }
+        List<Waypoint> wps = node.getWaypoints();
+        out[0] = interpolate(wps, time, fps, defX, X);
+        out[1] = interpolate(wps, time, fps, defY, Y);
+    }
+
+    public static void evaluateColorInto(ValueNode node, float time, float fps, float defR, float defG, float defB, float defA, float[] out) {
+        if (node == null) {
+            out[0] = defR;
+            out[1] = defG;
+            out[2] = defB;
+            out[3] = defA;
+            return;
+        }
+        if (!node.isAnimated()) {
+            out[0] = node.getR() != null ? node.getR().floatValue() : defR;
+            out[1] = node.getG() != null ? node.getG().floatValue() : defG;
+            out[2] = node.getB() != null ? node.getB().floatValue() : defB;
+            out[3] = node.getA() != null ? node.getA().floatValue() : defA;
+            return;
+        }
+        List<Waypoint> wps = node.getWaypoints();
+        out[0] = interpolate(wps, time, fps, defR, R);
+        out[1] = interpolate(wps, time, fps, defG, G);
+        out[2] = interpolate(wps, time, fps, defB, B);
+        out[3] = interpolate(wps, time, fps, defA, A);
+    }
+
+    public static float[] evaluateXY(ValueNode node, float time, float fps, float defX, float defY) {
+        float[] out = new float[2];
+        evaluateXYInto(node, time, fps, defX, defY, out);
+        return out;
     }
 
     public static float[] evaluateColor(ValueNode node, float time, float fps, float defR, float defG, float defB, float defA) {
-        if (node == null) return new float[]{defR, defG, defB, defA};
-        if (!node.isAnimated()) {
-            float r = node.getR() != null ? node.getR().floatValue() : defR;
-            float g = node.getG() != null ? node.getG().floatValue() : defG;
-            float b = node.getB() != null ? node.getB().floatValue() : defB;
-            float a = node.getA() != null ? node.getA().floatValue() : defA;
-            return new float[]{r, g, b, a};
-        }
-        return new float[]{
-            interpolate(node.getWaypoints(), time, fps, defR, R),
-            interpolate(node.getWaypoints(), time, fps, defG, G),
-            interpolate(node.getWaypoints(), time, fps, defB, B),
-            interpolate(node.getWaypoints(), time, fps, defA, A)
-        };
+        float[] out = new float[4];
+        evaluateColorInto(node, time, fps, defR, defG, defB, defA, out);
+        return out;
     }
 
     public static float getMaxTime(ValueNode node, float fps) {
