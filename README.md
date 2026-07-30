@@ -40,7 +40,7 @@ dependencies {
 ## Features
 
 - 🔊 Sounds, including delayed sound triggers
-- 🖼️ Images
+- 🖼️ Images, Shapes
 - 🎚️ Opacity, Alpha overflow (you can brighten animation by pushing its alpha over 1)
 - 📍 Origin
 - 🔄 Transformations
