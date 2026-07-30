@@ -6,11 +6,31 @@ Load and play `.sif or .sifz` Synfig animations natively in your libGDX project,
 
 **Platforms:** Android · iOS · Windows · Linux · macOS · GWT/HTML
 
+**MUST ADD** this to your launchers to make the shape inversions work properly!
+```java
+//Desktop
+configuration.setBackBufferConfig(8, 8, 8, 8, 16, 8, 0);
+//Android
+configuration.r = 8;
+configuration.g = 8;
+configuration.b = 8;
+configuration.a = 8;
+configuration.depth = 16;
+configuration.stencil = 8;
+configuration.numSamples = 0;
+//IOS
+configuration.colorFormat = GLKViewDrawableColorFormat.RGBA8888;
+configuration.depthFormat = GLKViewDrawableDepthFormat._16;
+configuration.stencilFormat = GLKViewDrawableStencilFormat._8;
+//GWT
+cfg.stencil = true;
+```
+
 **Synfig version:** `1.4.5-2024.05.19`
 
 ```java
 dependencies {
-  api 'com.github.SuperMaskedGod:GdxSynfig:1.5.0'
+  api 'com.github.SuperMaskedGod:GdxSynfig:1.6.0'
 }
 ```
  `Into your core build.gradle, Latest`
