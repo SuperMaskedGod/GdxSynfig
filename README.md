@@ -30,7 +30,7 @@ cfg.stencil = true;
 
 ```java
 dependencies {
-  api 'com.github.SuperMaskedGod:GdxSynfig:1.6.0'
+  api 'com.github.SuperMaskedGod:GdxSynfig:1.7.0'
 }
 ```
  `Into your core build.gradle, Latest`
