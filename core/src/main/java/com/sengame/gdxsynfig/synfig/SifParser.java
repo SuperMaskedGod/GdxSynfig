@@ -145,14 +145,9 @@ public final class SifParser {
                     waypoint.setBefore(attr(wp, "before"));
                     waypoint.setAfter(attr(wp, "after"));
 
-                    String tension = attr(wp, "tension");
-                    if (tension != null) waypoint.setTension(Float.parseFloat(tension));
-
-                    String continuity = attr(wp, "continuity");
-                    if (continuity != null) waypoint.setContinuity(Float.parseFloat(continuity));
-
-                    String bias = attr(wp, "bias");
-                    if (bias != null) waypoint.setBias(Float.parseFloat(bias));
+                    waypoint.setTension(floatAttr(wp, "tension"));
+                    waypoint.setContinuity(floatAttr(wp, "continuity"));
+                    waypoint.setBias(floatAttr(wp, "bias"));
 
                     Element inner = wp.getChildCount() > 0 ? wp.getChild(0) : null;
                     if (inner != null) {
@@ -178,6 +173,16 @@ public final class SifParser {
 
     private static String attr(Element el, String name) {
         return el.getAttribute(name, null);
+    }
+
+    private static float floatAttr(Element el, String name) {
+        String v = attr(el, name);
+        if (v == null) return 0f;
+        try {
+            return Float.parseFloat(v);
+        } catch (NumberFormatException e) {
+            return 0f;
+        }
     }
 
     private static String text(Element el) {

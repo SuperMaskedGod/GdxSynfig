@@ -1,8 +1,6 @@
 package com.sengame.gdxsynfig.synfig;
 
 import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
 
 public final class SifAnimMath {
     private SifAnimMath() {
@@ -20,21 +18,53 @@ public final class SifAnimMath {
     public static final ValueExtractor B = (v, def) -> v.getB() != null ? v.getB().floatValue() : def;
     public static final ValueExtractor A = (v, def) -> v.getA() != null ? v.getA().floatValue() : def;
 
-    private static final Map<List<Waypoint>, int[]> cursorCache = new WeakHashMap<>();
-
-    private static int[] cursorFor(List<Waypoint> wps) {
-        int[] existing = cursorCache.get(wps);
-        if (existing != null) return existing;
-        int[] created = new int[]{0};
-        cursorCache.put(wps, created);
-        return created;
+    private static float timeOf(Waypoint wp, float fps) {
+        return wp.getTimeSeconds(fps);
     }
 
-    private static int resolveStartIndex(List<Waypoint> wps, int[] cursor, float time, float fps) {
-        int idx = cursor[0];
-        if (idx < 0 || idx >= wps.size()) return 0;
-        float cursorTime = SifTimeUtils.parseTime(wps.get(idx).getTime(), fps);
-        if (cursorTime > time) return 0;
+    private static float valueOf(Waypoint wp, float def, ValueExtractor extractor) {
+        ValueNode v = wp.getValue();
+        return v == null ? def : extractor.extract(v, def);
+    }
+
+    private static boolean fits(List<Waypoint> wps, int i, float time, float fps) {
+        int n = wps.size();
+        if (i < -1 || i >= n) return false;
+        if (i >= 0 && timeOf(wps.get(i), fps) > time) return false;
+        return i + 1 >= n || timeOf(wps.get(i + 1), fps) > time;
+    }
+
+    private static int search(List<Waypoint> wps, float time, float fps) {
+        int lo = 0;
+        int hi = wps.size() - 1;
+        int ans = -1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            if (timeOf(wps.get(mid), fps) <= time) {
+                ans = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        return ans;
+    }
+
+    public static int findPrevWaypoint(ValueNode node, float time, float fps) {
+        List<Waypoint> wps = node.getWaypoints();
+        if (wps == null || wps.isEmpty()) return -1;
+        int c = node.cursor;
+        if (fits(wps, c, time, fps)) return c;
+        if (fits(wps, c + 1, time, fps)) {
+            node.cursor = c + 1;
+            return c + 1;
+        }
+        if (fits(wps, c - 1, time, fps)) {
+            node.cursor = c - 1;
+            return c - 1;
+        }
+        int idx = search(wps, time, fps);
+        node.cursor = Math.max(idx, 0);
         return idx;
     }
 
@@ -52,15 +82,15 @@ public final class SifAnimMath {
         if (interpType == null) interpType = "clamped";
 
         if ("linear".equals(interpType)) {
-            return extractor.extract(next.getValue(), 0f) - extractor.extract(cur.getValue(), 0f);
+            return valueOf(next, 0f, extractor) - valueOf(cur, 0f, extractor);
         } else if ("ease".equals(interpType) || "ease-in".equals(interpType) || "ease-out".equals(interpType) || "ease-in-out".equals(interpType) || "halt".equals(interpType)) {
             return 0f;
         }
 
-        float p1 = extractor.extract(cur.getValue(), 0f);
-        float p2 = extractor.extract(next.getValue(), 0f);
-        float t1 = SifTimeUtils.parseTime(cur.getTime(), fps);
-        float t2 = SifTimeUtils.parseTime(next.getTime(), fps);
+        float p1 = valueOf(cur, 0f, extractor);
+        float p2 = valueOf(next, 0f, extractor);
+        float t1 = timeOf(cur, fps);
+        float t2 = timeOf(next, fps);
 
         int p0Idx = Math.max(0, prevIdx - 1);
         int p3Idx = Math.min(wps.size() - 1, nextIdx + 1);
@@ -68,10 +98,10 @@ public final class SifAnimMath {
         Waypoint prev = wps.get(p0Idx);
         Waypoint post = wps.get(p3Idx);
 
-        float p0 = extractor.extract(prev.getValue(), 0f);
-        float p3 = extractor.extract(post.getValue(), 0f);
-        float t0 = SifTimeUtils.parseTime(prev.getTime(), fps);
-        float t3 = SifTimeUtils.parseTime(post.getTime(), fps);
+        float p0 = valueOf(prev, 0f, extractor);
+        float p3 = valueOf(post, 0f, extractor);
+        float t0 = timeOf(prev, fps);
+        float t3 = timeOf(post, fps);
 
         if (t1 == t0) {
             p0 = p1 - (p2 - p1);
@@ -111,46 +141,22 @@ public final class SifAnimMath {
         return m;
     }
 
-    public static float interpolate(List<Waypoint> wps, float time, float fps, float def, ValueExtractor extractor) {
-        if (wps == null || wps.isEmpty()) return def;
-
-        int[] cursor = cursorFor(wps);
-        int startIdx = resolveStartIndex(wps, cursor, time, fps);
-
-        Waypoint prev = null;
-        Waypoint next = null;
-        int prevIdx = -1;
-
+    private static float interpolateAt(List<Waypoint> wps, int prevIdx, float time, float fps, float def, ValueExtractor extractor) {
         int size = wps.size();
-        for (int i = startIdx; i < size; i++) {
-            Waypoint wp = wps.get(i);
-            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
-            if (wpTime <= time) {
-                prev = wp;
-                prevIdx = i;
-            } else {
-                next = wp;
-                break;
-            }
-        }
+        if (prevIdx < 0) return valueOf(wps.get(0), def, extractor);
 
-        cursor[0] = Math.max(prevIdx, 0);
+        Waypoint prev = wps.get(prevIdx);
+        if (prevIdx + 1 >= size) return valueOf(prev, def, extractor);
+        Waypoint next = wps.get(prevIdx + 1);
 
-        if (prev == null) {
-            assert next != null;
-            return extractor.extract(next.getValue(), def);
-        }
-        if (next == null) return extractor.extract(prev.getValue(), def);
-
-        float t0 = SifTimeUtils.parseTime(prev.getTime(), fps);
-        float t1 = SifTimeUtils.parseTime(next.getTime(), fps);
+        float t0 = timeOf(prev, fps);
+        float t1 = timeOf(next, fps);
         float duration = t1 - t0;
-
-        if (duration <= 0) return extractor.extract(prev.getValue(), def);
+        float v0 = valueOf(prev, def, extractor);
+        if (duration <= 0) return v0;
 
         float progress = (time - t0) / duration;
-        float v0 = extractor.extract(prev.getValue(), def);
-        float v1 = extractor.extract(next.getValue(), def);
+        float v1 = valueOf(next, def, extractor);
 
         if ("constant".equals(prev.getAfter()) || "constant".equals(next.getBefore())) {
             return progress < 1.0f ? v0 : v1;
@@ -158,14 +164,24 @@ public final class SifAnimMath {
 
         float m1 = getTangent(wps, prevIdx, prevIdx + 1, fps, extractor, true);
         float m2 = getTangent(wps, prevIdx, prevIdx + 1, fps, extractor, false);
-
         return hermite(v0, v1, m1, m2, progress);
+    }
+
+    public static float interpolate(List<Waypoint> wps, float time, float fps, float def, ValueExtractor extractor) {
+        if (wps == null || wps.isEmpty()) return def;
+        return interpolateAt(wps, search(wps, time, fps), time, fps, def, extractor);
+    }
+
+    private static float interpolate(ValueNode node, float time, float fps, float def, ValueExtractor extractor) {
+        List<Waypoint> wps = node.getWaypoints();
+        if (wps == null || wps.isEmpty()) return def;
+        return interpolateAt(wps, findPrevWaypoint(node, time, fps), time, fps, def, extractor);
     }
 
     public static float evaluateScalar(ValueNode node, float time, float fps, float def, ValueExtractor extractor) {
         if (node == null) return def;
         if (!node.isAnimated()) return extractor.extract(node, def);
-        return interpolate(node.getWaypoints(), time, fps, def, extractor);
+        return interpolate(node, time, fps, def, extractor);
     }
 
     public static float evaluateScalar(ValueNode node, float time, float fps, float def) {
@@ -181,30 +197,9 @@ public final class SifAnimMath {
         List<Waypoint> wps = node.getWaypoints();
         if (wps == null || wps.isEmpty()) return def;
 
-        int[] cursor = cursorFor(wps);
-        int startIdx = resolveStartIndex(wps, cursor, time, fps);
-
-        Waypoint prev = null;
-        Waypoint next = null;
-        int prevIdx = -1;
-
-        int size = wps.size();
-        for (int i = startIdx; i < size; i++) {
-            Waypoint wp = wps.get(i);
-            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
-            if (wpTime <= time) {
-                prev = wp;
-                prevIdx = i;
-            } else {
-                next = wp;
-                break;
-            }
-        }
-
-        cursor[0] = Math.max(prevIdx, 0);
-
-        Waypoint chosen = prev != null ? prev : next;
-        if (chosen == null || chosen.getValue() == null) return def;
+        int idx = findPrevWaypoint(node, time, fps);
+        Waypoint chosen = wps.get(Math.max(idx, 0));
+        if (chosen.getValue() == null) return def;
         Boolean b = chosen.getValue().getBooleanValue();
         return b != null ? b : def;
     }
@@ -221,8 +216,14 @@ public final class SifAnimMath {
             return;
         }
         List<Waypoint> wps = node.getWaypoints();
-        out[0] = interpolate(wps, time, fps, defX, X);
-        out[1] = interpolate(wps, time, fps, defY, Y);
+        if (wps == null || wps.isEmpty()) {
+            out[0] = defX;
+            out[1] = defY;
+            return;
+        }
+        int idx = findPrevWaypoint(node, time, fps);
+        out[0] = interpolateAt(wps, idx, time, fps, defX, X);
+        out[1] = interpolateAt(wps, idx, time, fps, defY, Y);
     }
 
     public static void evaluateColorInto(ValueNode node, float time, float fps, float defR, float defG, float defB, float defA, float[] out) {
@@ -241,10 +242,18 @@ public final class SifAnimMath {
             return;
         }
         List<Waypoint> wps = node.getWaypoints();
-        out[0] = interpolate(wps, time, fps, defR, R);
-        out[1] = interpolate(wps, time, fps, defG, G);
-        out[2] = interpolate(wps, time, fps, defB, B);
-        out[3] = interpolate(wps, time, fps, defA, A);
+        if (wps == null || wps.isEmpty()) {
+            out[0] = defR;
+            out[1] = defG;
+            out[2] = defB;
+            out[3] = defA;
+            return;
+        }
+        int idx = findPrevWaypoint(node, time, fps);
+        out[0] = interpolateAt(wps, idx, time, fps, defR, R);
+        out[1] = interpolateAt(wps, idx, time, fps, defG, G);
+        out[2] = interpolateAt(wps, idx, time, fps, defB, B);
+        out[3] = interpolateAt(wps, idx, time, fps, defA, A);
     }
 
     public static float[] evaluateXY(ValueNode node, float time, float fps, float defX, float defY) {
@@ -264,7 +273,7 @@ public final class SifAnimMath {
         float max = 0f;
         if (node.isAnimated() && node.getWaypoints() != null) {
             for (Waypoint wp : node.getWaypoints()) {
-                max = Math.max(max, SifTimeUtils.parseTime(wp.getTime(), fps));
+                max = Math.max(max, wp.getTimeSeconds(fps));
             }
         }
         for (ValueNode child : node.getNamedChildren().values()) {

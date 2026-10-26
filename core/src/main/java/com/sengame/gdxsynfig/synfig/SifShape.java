@@ -13,7 +13,12 @@ public class SifShape extends Actor {
     private static ShapeRenderer sharedRenderer;
     private static final EarClippingTriangulator SHARED_TRIANGULATOR = new EarClippingTriangulator();
     private static final float INVERT_FILL_HALF_EXTENT = 100000f;
-    private final String shapeType;
+    private static final int KIND_NONE = 0;
+    private static final int KIND_STAR = 1;
+    private static final int KIND_CIRCLE = 2;
+    private static final int KIND_RECT = 3;
+    private static final int MAX_CIRCLE_SEGMENTS = 96;
+    private final int kind;
     private final Param colorParam;
     private final Param amountParam;
     private final Param originParam;
@@ -45,7 +50,10 @@ public class SifShape extends Actor {
     private float currentRadius;
 
     public SifShape(Layer layer, float scaleFactor, float canvasCenterX, float canvasCenterY) {
-        this.shapeType = layer.getType();
+        String type = layer.getType();
+        this.kind = "star".equals(type) ? KIND_STAR
+            : "circle".equals(type) ? KIND_CIRCLE
+            : "rectangle".equals(type) ? KIND_RECT : KIND_NONE;
         this.colorParam = layer.getParam("color");
         this.amountParam = layer.getParam("amount");
         this.originParam = layer.getParam("origin");
@@ -79,12 +87,11 @@ public class SifShape extends Actor {
         currentInvert = (invertParam != null && invertParam.getValue() != null)
             && SifAnimMath.evaluateBoolean(invertParam.getValue(), time, fps, false);
 
-        if ("star".equals(shapeType)) {
-            updateStar(time, fps);
-        } else if ("circle".equals(shapeType)) {
-            updateCircle(time, fps);
-        } else if ("rectangle".equals(shapeType)) {
-            updateRectangle(time, fps);
+        switch (kind) {
+            case KIND_STAR: updateStar(time, fps); break;
+            case KIND_CIRCLE: updateCircle(time, fps); break;
+            case KIND_RECT: updateRectangle(time, fps); break;
+            default: break;
         }
     }
 
@@ -127,7 +134,8 @@ public class SifShape extends Actor {
         }
 
         if (cachedTriangles == null || cachedPointCount != points || cachedRegular != regular) {
-            cachedTriangles = SHARED_TRIANGULATOR.computeTriangles(verts);
+
+            cachedTriangles = new ShortArray(SHARED_TRIANGULATOR.computeTriangles(verts));
             cachedPointCount = points;
             cachedRegular = regular;
         }
@@ -206,13 +214,21 @@ public class SifShape extends Actor {
     }
 
     private void drawShapeFill(ShapeRenderer renderer) {
-        if ("star".equals(shapeType)) {
-            drawStar(renderer);
-        } else if ("circle".equals(shapeType)) {
-            int segments = Math.max(16, (int) currentRadius);
-            renderer.circle(currentX, currentY, currentRadius, segments);
-        } else if ("rectangle".equals(shapeType)) {
-            renderer.rect(currentX, currentY, currentWidth, currentHeight);
+        switch (kind) {
+            case KIND_STAR:
+                drawStar(renderer);
+                break;
+            case KIND_CIRCLE: {
+
+                int segments = Math.min(MAX_CIRCLE_SEGMENTS, Math.max(16, (int) currentRadius));
+                renderer.circle(currentX, currentY, currentRadius, segments);
+                break;
+            }
+            case KIND_RECT:
+                renderer.rect(currentX, currentY, currentWidth, currentHeight);
+                break;
+            default:
+                break;
         }
     }
 
@@ -266,6 +282,13 @@ public class SifShape extends Actor {
             sharedRenderer = new ShapeRenderer();
         }
         return sharedRenderer;
+    }
+
+    public static void disposeShared() {
+        if (sharedRenderer != null) {
+            sharedRenderer.dispose();
+            sharedRenderer = null;
+        }
     }
 
     public static boolean isShapeLayer(String type) {

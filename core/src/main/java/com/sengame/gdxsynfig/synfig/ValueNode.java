@@ -20,6 +20,21 @@ public class ValueNode {
     private final List<Waypoint> waypoints = new ArrayList<>();
     private SifCanvas nestedCanvas;
 
+    int cursor = 0;
+
+    private Double cachedDouble;
+    private boolean doubleCached;
+    private Boolean cachedBoolean;
+    private boolean booleanCached;
+    private float cachedTime;
+    private float cachedTimeFps = Float.NaN;
+
+    public void invalidateCaches() {
+        doubleCached = false;
+        booleanCached = false;
+        cachedTimeFps = Float.NaN;
+    }
+
     public String getType() {
         return type;
     }
@@ -125,18 +140,29 @@ public class ValueNode {
     }
 
     public Double getDoubleValue() {
-        String v = attributes.get("value");
-        if (v == null) return null;
-        try {
-            return Double.parseDouble(v);
-        } catch (NumberFormatException e) {
-            return null;
+        if (!doubleCached) {
+            String v = attributes.get("value");
+            Double parsed = null;
+            if (v != null) {
+                try {
+                    parsed = Double.parseDouble(v);
+                } catch (NumberFormatException ignored) {
+                    parsed = null;
+                }
+            }
+            cachedDouble = parsed;
+            doubleCached = true;
         }
+        return cachedDouble;
     }
 
     public Boolean getBooleanValue() {
-        String v = attributes.get("value");
-        return v == null ? null : Boolean.parseBoolean(v);
+        if (!booleanCached) {
+            String v = attributes.get("value");
+            cachedBoolean = v == null ? null : Boolean.parseBoolean(v);
+            booleanCached = true;
+        }
+        return cachedBoolean;
     }
 
     public String getStringValue() {
@@ -176,6 +202,14 @@ public class ValueNode {
 
     public String getTimeRaw() {
         return attributes.get("value");
+    }
+
+    public float getTimeSeconds(float fps) {
+        if (fps != cachedTimeFps) {
+            cachedTime = SifTimeUtils.parseTime(attributes.get("value"), fps);
+            cachedTimeFps = fps;
+        }
+        return cachedTime;
     }
 
     @Override

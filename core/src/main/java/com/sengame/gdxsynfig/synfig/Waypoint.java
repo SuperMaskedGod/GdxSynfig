@@ -9,12 +9,24 @@ public class Waypoint {
     private float continuity;
     private float bias;
 
+    private float cachedTime;
+    private float cachedFps = Float.NaN;
+
     public String getTime() {
         return time;
     }
 
     public void setTime(String time) {
         this.time = time;
+        this.cachedFps = Float.NaN;
+    }
+
+    public float getTimeSeconds(float fps) {
+        if (fps != cachedFps) {
+            cachedTime = SifTimeUtils.parseTime(time, fps);
+            cachedFps = fps;
+        }
+        return cachedTime;
     }
 
     public String getBefore() {

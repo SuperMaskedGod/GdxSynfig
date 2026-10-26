@@ -82,22 +82,12 @@ public class SifAnimation extends Container<Group> {
         }
     }
 
-    /**
-     * Swaps the texture of animation at index n for one of your choosing
-     * @param index
-     * @param texture
-     */
     public void swapTexture(int index, Texture texture) {
         if (texture != null) {
             swapTexture(index, new TextureRegion(texture));
         }
     }
 
-    /**
-     * Swaps the texture of animation at index n for one of your choosing
-     * @param index
-     * @param region
-     */
     public void swapTexture(int index, TextureRegion region) {
         if (region == null || index < 0 || index >= allImages.size) {
             return;
@@ -117,10 +107,15 @@ public class SifAnimation extends Container<Group> {
             return;
         }
 
+        boolean wasPlaceholder = imageActor.isPlaceholder();
         imageActor.setDrawable(new SpriteDrawable(new Sprite(region)));
 
         float newWidth, newHeight;
-        if (regionWidth > regionHeight) {
+        if (wasPlaceholder) {
+            newWidth = regionWidth;
+            newHeight = regionHeight;
+            imageActor.clearPlaceholder();
+        } else if (regionWidth > regionHeight) {
             float scale = originalWidth / regionWidth;
             newWidth = originalWidth;
             newHeight = regionHeight * scale;
@@ -132,6 +127,8 @@ public class SifAnimation extends Container<Group> {
 
         imageActor.setSize(newWidth, newHeight);
         imageActor.setOrigin(newWidth / 2f, newHeight / 2f);
+
+        if (wasPlaceholder && isRoot) updateTree(currentTime);
     }
 
     public SifAnimation(SifCanvas canvas, FileHandle folderPath) {
@@ -236,9 +233,6 @@ public class SifAnimation extends Container<Group> {
         contentGroup.setOrigin(baseWidth / 2f, baseHeight / 2f);
         setOrigin(baseWidth / 2f, baseHeight / 2f);
 
-        //Remove fill, its why we couldn't resize higher but we could resize lower, (resize higher clipped)
-        //fill();
-
         float scaleFactor = calculateScaleFromCanvas(canvas, baseWidth);
         populateActors(canvas, folderPath, audioFolderPath, assetManager, scaleFactor, baseWidth / 2f, baseHeight / 2f, 0, this.musicEvents, this.allImages);
 
@@ -284,9 +278,6 @@ public class SifAnimation extends Container<Group> {
         super.setHeight(height);
     }
 
-    /**
-     * If called, shows the first frame of the animation until play is called
-     */
     public void showBeforeStart() {
         setVisible(true);
         currentTime = 0f;
@@ -412,16 +403,8 @@ public class SifAnimation extends Container<Group> {
         }
     }
 
-    /**
-     * Skips to a specific frame in the animation
-     * @param frame
-     */
     public void skipToFrame(float frame) { skipToTime(frame / fps); }
 
-    /**
-     * Skips to a specific time in the animation
-     * @param timeSeconds
-     */
     public void skipToTime(float timeSeconds) {
         this.currentTime = timeSeconds;
         updateTree(currentTime);
@@ -523,7 +506,8 @@ public class SifAnimation extends Container<Group> {
     }
 
     private void checkMusicTriggers() {
-        for (MusicEvent me : musicEvents) {
+        for (int i = 0; i < musicEvents.size; i++) {
+            MusicEvent me = musicEvents.get(i);
             boolean active = isMusicEventBranchActive(me);
             float effectiveTime = me.owningGroup.applyTimeLoopChain(me, me.owningGroup.currentGroupTime);
 
@@ -592,10 +576,7 @@ public class SifAnimation extends Container<Group> {
         public float apply(float time) {
             float frequency = 1f;
             if (frequencyNode != null) {
-                Double v = frequencyNode.isAnimated()
-                    ? evaluateAnimatedScalar(frequencyNode, time, fpsRef, 1f)
-                    : frequencyNode.getDoubleValue();
-                if (v != null) frequency = v.floatValue();
+                frequency = evaluateLinearScalar(frequencyNode, time, fpsRef, 1f);
             }
             if (frequency <= 0f) return time;
             return (float) Math.floor(time * frequency) / frequency;
@@ -620,12 +601,19 @@ public class SifAnimation extends Container<Group> {
 
     private final Array<Object> childItems;
     private final java.util.IdentityHashMap<Object, Array<TimeTransform>> timeLoopChains = new java.util.IdentityHashMap<>();
+
+    private final Array<Array<TimeTransform>> chainsByIndex = new Array<>();
     private float currentGroupTime = 0f;
 
     private void precomputeTimeLoopChains() {
+        timeLoopChains.clear();
+        chainsByIndex.clear();
         for (int i = 0; i < childItems.size; i++) {
             Object item = childItems.get(i);
-            if (!(item instanceof Actor) && !(item instanceof MusicEvent)) continue;
+            if (!(item instanceof Actor) && !(item instanceof MusicEvent)) {
+                chainsByIndex.add(null);
+                continue;
+            }
 
             Array<TimeTransform> chain = new Array<>();
             for (int j = childItems.size - 1; j > i; j--) {
@@ -635,31 +623,44 @@ public class SifAnimation extends Container<Group> {
                 }
             }
             timeLoopChains.put(item, chain);
+            chainsByIndex.add(chain.size == 0 ? null : chain);
         }
     }
 
     private float applyTimeLoopChain(Object item, float time) {
         Array<TimeTransform> chain = timeLoopChains.get(item);
         if (chain == null) return time;
+        return applyChain(chain, time);
+    }
+
+    private static float applyChain(Array<TimeTransform> chain, float time) {
         float effectiveTime = time;
-        for (TimeTransform tt : chain) {
-            effectiveTime = tt.apply(effectiveTime);
+        for (int i = 0; i < chain.size; i++) {
+            effectiveTime = chain.get(i).apply(effectiveTime);
         }
         return effectiveTime;
     }
+
+    private String lastActiveLayerName;
+    private boolean activeLayerResolved;
 
     private void updateTree(float time) {
         currentGroupTime = time;
 
         if (switchLayerParam != null && switchLayerParam.getValue() != null) {
             String activeLayerName = evaluateActiveLayerName(switchLayerParam.getValue(), time, fps);
-            for (Actor child : contentGroup.getChildren()) {
-                Object obj = child.getUserObject();
-                if (obj instanceof String) {
-                    String childDesc = (String) obj;
-                    boolean matches = childDesc.equals(activeLayerName);
-                    child.setVisible(matches);
+
+            if (!activeLayerResolved || !sameString(activeLayerName, lastActiveLayerName)) {
+                Array<Actor> children = contentGroup.getChildren();
+                for (int i = 0; i < children.size; i++) {
+                    Actor child = children.get(i);
+                    Object obj = child.getUserObject();
+                    if (obj instanceof String) {
+                        child.setVisible(((String) obj).equals(activeLayerName));
+                    }
                 }
+                lastActiveLayerName = activeLayerName;
+                activeLayerResolved = true;
             }
         }
 
@@ -668,7 +669,11 @@ public class SifAnimation extends Container<Group> {
             if (!(item instanceof Actor)) continue;
 
             Actor actor = (Actor) item;
-            float effectiveTime = applyTimeLoopChain(item, time);
+
+            if (!actor.isVisible() && !(actor instanceof SifAnimation && ((SifAnimation) actor).hasMusic)) continue;
+
+            Array<TimeTransform> chain = chainsByIndex.get(i);
+            float effectiveTime = chain == null ? time : applyChain(chain, time);
 
             if (actor instanceof SifImage) {
                 ((SifImage) actor).updateAnimation(effectiveTime, fps);
@@ -683,6 +688,10 @@ public class SifAnimation extends Container<Group> {
         }
     }
 
+    private static boolean sameString(String a, String b) {
+        return a == null ? b == null : a.equals(b);
+    }
+
     private static String evaluateActiveLayerName(ValueNode node, float time, float fps) {
         if (!node.isAnimated()) {
             return node.getStringValue();
@@ -692,18 +701,10 @@ public class SifAnimation extends Container<Group> {
             return node.getStringValue();
         }
 
-        Waypoint prev = null;
-        for (Waypoint wp : wps) {
-            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
-            if (wpTime <= time) {
-                prev = wp;
-            } else {
-                break;
-            }
-        }
-
-        if (prev != null && prev.getValue() != null) {
-            return prev.getValue().getStringValue();
+        int idx = SifAnimMath.findPrevWaypoint(node, time, fps);
+        if (idx >= 0) {
+            ValueNode v = wps.get(idx).getValue();
+            if (v != null) return v.getStringValue();
         }
         return node.getStringValue();
     }
@@ -745,7 +746,16 @@ public class SifAnimation extends Container<Group> {
             updateDuration(layer);
         }
         precomputeTimeLoopChains();
+
+        boolean music = false;
+        for (int i = 0; i < childItems.size && !music; i++) {
+            Object o = childItems.get(i);
+            music = o instanceof MusicEvent || (o instanceof SifAnimation && ((SifAnimation) o).hasMusic);
+        }
+        hasMusic = music;
     }
+
+    private boolean hasMusic;
 
     private Param amountParam;
     private Param transformParam;
@@ -764,11 +774,7 @@ public class SifAnimation extends Container<Group> {
     private float resolveLocalTime(float parentTime) {
         float dilation = 1f;
         if (timeDilationParam != null && timeDilationParam.getValue() != null) {
-            ValueNode dNode = timeDilationParam.getValue();
-            Double d = dNode.isAnimated()
-                ? evaluateAnimatedScalar(dNode, parentTime, fps, 1f)
-                : dNode.getDoubleValue();
-            if (d != null) dilation = d.floatValue();
+            dilation = evaluateLinearScalar(timeDilationParam.getValue(), parentTime, fps, 1f);
         }
 
         float offset = 0f;
@@ -780,87 +786,68 @@ public class SifAnimation extends Container<Group> {
         return parentTime * dilation + offset;
     }
 
-    private static Double evaluateAnimatedScalar(ValueNode node, float time, float fps, float def) {
+    private static float evaluateLinearScalar(ValueNode node, float time, float fps, float def) {
         if (!node.isAnimated()) {
             Double v = node.getDoubleValue();
-            return v != null ? v : (double) def;
+            return v != null ? v.floatValue() : def;
         }
         List<Waypoint> wps = node.getWaypoints();
-        if (wps == null || wps.isEmpty()) return (double) def;
+        if (wps == null || wps.isEmpty()) return def;
 
-        Waypoint prev = null;
-        Waypoint next = null;
-        for (Waypoint wp : wps) {
-            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
-            if (wpTime <= time) {
-                prev = wp;
-            } else {
-                next = wp;
-                break;
-            }
-        }
+        int idx = SifAnimMath.findPrevWaypoint(node, time, fps);
+        if (idx < 0) return valueAsFloat(wps.get(0).getValue(), def);
+        Waypoint prev = wps.get(idx);
+        if (idx + 1 >= wps.size()) return valueAsFloat(prev.getValue(), def);
+        Waypoint next = wps.get(idx + 1);
 
-        if (prev == null && next != null) return valueAsDouble(next.getValue(), def);
-        if (prev != null && next == null) return valueAsDouble(prev.getValue(), def);
-        if (prev == null) return (double) def;
-
-        float t0 = SifTimeUtils.parseTime(prev.getTime(), fps);
-        float t1 = SifTimeUtils.parseTime(next.getTime(), fps);
+        float t0 = prev.getTimeSeconds(fps);
+        float t1 = next.getTimeSeconds(fps);
         float duration = t1 - t0;
-        if (duration <= 0) return valueAsDouble(prev.getValue(), def);
+        double v0 = valueAsFloat(prev.getValue(), def);
+        if (duration <= 0) return (float) v0;
 
         float progress = (time - t0) / duration;
-        double v0 = valueAsDouble(prev.getValue(), def);
-        double v1 = valueAsDouble(next.getValue(), def);
+        double v1 = valueAsFloat(next.getValue(), def);
 
         if ("constant".equals(prev.getAfter()) || "constant".equals(next.getBefore())) {
-            return progress < 1.0f ? v0 : v1;
+            return (float) (progress < 1.0f ? v0 : v1);
         }
-        return v0 + (v1 - v0) * progress;
+        return (float) (v0 + (v1 - v0) * progress);
     }
 
-    private static double valueAsDouble(ValueNode val, float def) {
+    private static float valueAsFloat(ValueNode val, float def) {
         if (val == null) return def;
         Double d = val.getDoubleValue();
-        return d != null ? d : def;
+        return d != null ? d.floatValue() : def;
     }
 
     private static float evaluateAnimatedTime(ValueNode node, float time, float fps) {
         if (!node.isAnimated()) {
-            return SifTimeUtils.parseTime(node.getTimeRaw(), fps);
+            return node.getTimeSeconds(fps);
         }
         List<Waypoint> wps = node.getWaypoints();
         if (wps == null || wps.isEmpty()) {
-            return SifTimeUtils.parseTime(node.getTimeRaw(), fps);
+            return node.getTimeSeconds(fps);
         }
 
-        Waypoint prev = null;
-        Waypoint next = null;
-        for (Waypoint wp : wps) {
-            float wpTime = SifTimeUtils.parseTime(wp.getTime(), fps);
-            if (wpTime <= time) {
-                prev = wp;
-            } else {
-                next = wp;
-                break;
-            }
+        int idx = SifAnimMath.findPrevWaypoint(node, time, fps);
+        if (idx < 0) {
+            ValueNode first = wps.get(0).getValue();
+            return first != null ? first.getTimeSeconds(fps) : 0f;
         }
+        Waypoint prev = wps.get(idx);
+        if (idx + 1 >= wps.size()) {
+            return prev.getValue() != null ? prev.getValue().getTimeSeconds(fps) : 0f;
+        }
+        Waypoint next = wps.get(idx + 1);
 
-        if (prev == null && next != null) {
-            return next.getValue() != null ? SifTimeUtils.parseTime(next.getValue().getTimeRaw(), fps) : 0f;
-        }
-        if (prev != null && next == null) {
-            return prev.getValue() != null ? SifTimeUtils.parseTime(prev.getValue().getTimeRaw(), fps) : 0f;
-        }
-        if (prev == null) return 0f;
-
-        float t0 = SifTimeUtils.parseTime(prev.getTime(), fps);
-        float t1 = SifTimeUtils.parseTime(next.getTime(), fps);
+        float t0 = prev.getTimeSeconds(fps);
+        float t1 = next.getTimeSeconds(fps);
         float duration = t1 - t0;
-        float v0 = prev.getValue() != null ? SifTimeUtils.parseTime(prev.getValue().getTimeRaw(), fps) : 0f;
+        float v0 = prev.getValue() != null ? prev.getValue().getTimeSeconds(fps) : 0f;
         if (duration <= 0) return v0;
 
-        float v1 = next.getValue() != null ? SifTimeUtils.parseTime(next.getValue().getTimeRaw(), fps) : 0f;
+        float v1 = next.getValue() != null ? next.getValue().getTimeSeconds(fps) : 0f;
         float progress = (time - t0) / duration;
 
         if ("constant".equals(prev.getAfter()) || "constant".equals(next.getBefore())) {
@@ -883,6 +870,7 @@ public class SifAnimation extends Container<Group> {
         nestedGroup.nestedScaleFactor = scaleFactor;
         nestedGroup.nestedCx = canvasCenterX;
         nestedGroup.nestedCy = canvasCenterY;
+        nestedGroup.fps = this.fps;
 
         nestedGroup.populateActors(childCanvas, folderPath, audioFolderPath, assetManager, scaleFactor, 0f, 0f, depth + 1, masterMusicList, masterImageList);
         nestedGroup.setUserObject(layer.getDesc());
@@ -913,6 +901,7 @@ public class SifAnimation extends Container<Group> {
         switchGroup.nestedScaleFactor = scaleFactor;
         switchGroup.nestedCx = canvasCenterX;
         switchGroup.nestedCy = canvasCenterY;
+        switchGroup.fps = this.fps;
 
         switchGroup.populateActors(childCanvas, folderPath, audioFolderPath, assetManager, scaleFactor, 0f, 0f, depth + 1, masterMusicList, masterImageList);
         switchGroup.setUserObject(layer.getDesc());
@@ -925,9 +914,9 @@ public class SifAnimation extends Container<Group> {
         if (layerName == null || layerName.isEmpty()) return;
 
         TextureRegion region = resolveTexture(folderPath.child(layerName), assetManager);
-        if (region == null) return;
-
-        SifImage animatedImage = new SifImage(layer, region, scaleFactor, cx, cy);
+        SifImage animatedImage = (region != null)
+            ? new SifImage(layer, region, scaleFactor, cx, cy)
+            : new SifImage(layer, scaleFactor, cx, cy);
         animatedImage.setUserObject(layer.getDesc());
         this.contentGroup.addActor(animatedImage);
         if (masterImageList != null) {
@@ -1085,6 +1074,7 @@ public class SifAnimation extends Container<Group> {
 
     private TextureRegion resolveTexture(FileHandle file, AssetManager assetManager) {
         Texture tex;
+        if (!file.exists()) return null;
         if (assetManager != null) {
             String path = file.path();
             if (!assetManager.isLoaded(path, Texture.class)) {
@@ -1127,25 +1117,10 @@ public class SifAnimation extends Container<Group> {
         return music;
     }
 
-    /**
-     * Loads the assets and returns Array String of the assets loaded
-     * @param canvas
-     * @param folderPath
-     * @param assetManager
-     * @return
-     */
     public static Array<String> LoadAssets(SifCanvas canvas, FileHandle folderPath, AssetManager assetManager) {
         return LoadAssets(canvas, folderPath, folderPath, assetManager);
     }
 
-    /**
-     * Loads the assets and returns Array String of the assets loaded
-     * @param canvas
-     * @param assetFolderPath
-     * @param audioFolderPath
-     * @param assetManager
-     * @return
-     */
     public static Array<String> LoadAssets(SifCanvas canvas, FileHandle assetFolderPath, FileHandle audioFolderPath, AssetManager assetManager) {
         Array<String> loadedPaths = new Array<>();
         if (canvas == null || assetManager == null) return loadedPaths;
@@ -1181,7 +1156,9 @@ public class SifAnimation extends Container<Group> {
                 default: {
                     String layerName = layer.getDesc();
                     if (layerName == null || layerName.isEmpty()) break;
-                    queueAsset(assetManager, assetFolderPath.child(layerName).path(), Texture.class, loadedPaths);
+                    FileHandle texFile = assetFolderPath.child(layerName);
+                    if (!texFile.exists()) break;
+                    queueAsset(assetManager, texFile.path(), Texture.class, loadedPaths);
                     break;
                 }
             }

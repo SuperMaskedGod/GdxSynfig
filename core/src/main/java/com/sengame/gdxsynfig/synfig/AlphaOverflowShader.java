@@ -34,7 +34,12 @@ public final class AlphaOverflowShader {
         "}";
 
     private static ShaderProgram shader;
-    private static float lastAmount = -1f;
+
+    private static int depth = 0;
+    private static float currentAmount = 1f;
+    private static ShaderProgram[] savedShader = new ShaderProgram[8];
+    private static int[] savedBlend = new int[8 * 4];
+    private static float[] savedAmount = new float[8];
 
     private AlphaOverflowShader() {
     }
@@ -43,31 +48,67 @@ public final class AlphaOverflowShader {
         if (shader == null) {
             shader = new ShaderProgram(VERTEX, FRAGMENT);
             if (!shader.isCompiled()) {
-                throw new IllegalStateException("AlphaOverflowShader failed to compile: " + shader.getLog());
+                String log = shader.getLog();
+                shader.dispose();
+                shader = null;
+                throw new IllegalStateException("AlphaOverflowShader failed to compile: " + log);
             }
         }
         return shader;
     }
 
+    private static void ensureCapacity(int d) {
+        if (d < savedShader.length) return;
+        int n = savedShader.length * 2;
+        savedShader = java.util.Arrays.copyOf(savedShader, n);
+        savedAmount = java.util.Arrays.copyOf(savedAmount, n);
+        savedBlend = java.util.Arrays.copyOf(savedBlend, n * 4);
+    }
+
     public static void begin(SpriteBatch batch, float amount) {
-        batch.setShader(shader());
-        if (amount != lastAmount) {
-            shader().setUniformf("u_overflow", amount);
-            lastAmount = amount;
-        }
+        int d = depth++;
+        ensureCapacity(d);
+
+        savedShader[d] = batch.getShader();
+        savedAmount[d] = currentAmount;
+        savedBlend[d * 4] = batch.getBlendSrcFunc();
+        savedBlend[d * 4 + 1] = batch.getBlendDstFunc();
+        savedBlend[d * 4 + 2] = batch.getBlendSrcFuncAlpha();
+        savedBlend[d * 4 + 3] = batch.getBlendDstFuncAlpha();
+
+        ShaderProgram s = shader();
+        batch.setShader(s);
+        s.setUniformf("u_overflow", amount);
+        currentAmount = amount;
         batch.setBlendFunctionSeparate(GL20.GL_ONE, GL20.GL_ONE_MINUS_SRC_ALPHA, GL20.GL_ONE, GL20.GL_ONE_MINUS_SRC_ALPHA);
     }
 
     public static void end(Batch batch) {
-        batch.setShader(null);
-        batch.setBlendFunctionSeparate(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA, GL20.GL_ONE, GL20.GL_ONE_MINUS_SRC_ALPHA);
+        if (depth <= 0) {
+            depth = 0;
+            return;
+        }
+        int d = --depth;
+
+        ShaderProgram prev = savedShader[d];
+        savedShader[d] = null;
+        batch.setShader(prev);
+        batch.setBlendFunctionSeparate(savedBlend[d * 4], savedBlend[d * 4 + 1], savedBlend[d * 4 + 2], savedBlend[d * 4 + 3]);
+
+        currentAmount = savedAmount[d];
+        if (prev != null && prev == shader) {
+
+            prev.setUniformf("u_overflow", currentAmount);
+        }
     }
 
     public static void dispose() {
         if (shader != null) {
             shader.dispose();
             shader = null;
-            lastAmount = -1f;
         }
+        depth = 0;
+        currentAmount = 1f;
+        java.util.Arrays.fill(savedShader, null);
     }
 }

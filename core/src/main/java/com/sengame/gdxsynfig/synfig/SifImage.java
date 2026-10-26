@@ -14,12 +14,7 @@ public class SifImage extends Image {
     private final float canvasCenterY;
     private float trueAmount = 1f;
 
-    private static final ThreadLocal<float[]> SCRATCH_XY = new ThreadLocal<float[]>() {
-        @Override
-        protected float[] initialValue() {
-            return new float[2];
-        }
-    };
+    private static final float[] SCRATCH_XY = new float[2];
 
     public SifImage(Layer layer, TextureRegion region, float scaleFactor, float canvasCenterX, float canvasCenterY) {
         super(region);
@@ -30,6 +25,27 @@ public class SifImage extends Image {
         this.canvasCenterY = canvasCenterY;
 
         setOrigin(getWidth() / 2f, getHeight() / 2f);
+    }
+
+    private boolean placeholder;
+
+    // Template layer whose texture doesn't exist yet. Waits for swapTexture().
+    public SifImage(Layer layer, float scaleFactor, float canvasCenterX, float canvasCenterY) {
+        super();
+        this.amountParam = layer.getParam("amount");
+        this.transformParam = layer.getParam("transformation");
+        this.scaleFactor = scaleFactor;
+        this.canvasCenterX = canvasCenterX;
+        this.canvasCenterY = canvasCenterY;
+        this.placeholder = true;
+    }
+
+    public boolean isPlaceholder() {
+        return placeholder;
+    }
+
+    void clearPlaceholder() {
+        placeholder = false;
     }
 
     public void updateAnimation(float currentTime, float fps) {
@@ -66,7 +82,7 @@ public class SifImage extends Image {
         }
 
         ValueNode tNode = transformParam.getValue();
-        float[] xy = SCRATCH_XY.get();
+        float[] xy = SCRATCH_XY;
 
         ValueNode offsetNode = tNode.getNamedChild("offset");
         float x = cx - target.getOriginX();
